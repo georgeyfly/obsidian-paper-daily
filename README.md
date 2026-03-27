@@ -8,6 +8,9 @@
 
 ## 中文说明
 
+### To Do
+- [ ] influencer https://github.com/zarazhangrui/follow-builders, alphaxiv
+
 ### 简介
 
 Paper Daily 是一个 Obsidian 插件，每天自动从 **arXiv** 和 **HuggingFace Daily Papers** 拉取你关注领域的最新论文，通过 LLM 分批打分（10 篇/批）后重排，生成结构化每日摘要，并支持对排名最高的论文进行 HTML 全文精读并写入独立笔记。支持任意日期范围回补，所有操作均有悬浮进度组件实时反馈。
