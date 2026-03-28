@@ -9,45 +9,13 @@ import { ArxivSource } from "../sources/arxivSource";
 import { HFSource } from "../sources/hfSource";
 import { rankPapers } from "../scoring/rank";
 import { computeInterestHits } from "../scoring/interest";
-import { OpenAICompatibleProvider } from "../llm/openaiCompatible";
-import { AnthropicProvider } from "../llm/anthropicProvider";
 import type { LLMProvider } from "../llm/provider";
 import type { HFTrackStore } from "../storage/hfTrackStore";
-import { DEFAULT_DEEP_READ_PROMPT, DEFAULT_SCORING_PROMPT } from "../settings";
+import { DEFAULT_DEEP_READ_PROMPT } from "../settings";
+import { buildLLMProvider, fillTemplate, getActivePrompt, getActiveScoringPrompt } from "./promptHelpers";
 
 function getISODate(d: Date): string {
   return d.toISOString().slice(0, 10);
-}
-
-function buildLLMProvider(settings: PaperDailySettings): LLMProvider {
-  if (settings.llm.provider === "anthropic") {
-    return new AnthropicProvider(settings.llm.apiKey, settings.llm.model);
-  }
-  return new OpenAICompatibleProvider(settings.llm.baseUrl, settings.llm.apiKey, settings.llm.model);
-}
-
-function fillTemplate(template: string, vars: Record<string, string>): string {
-  let result = template;
-  for (const [k, v] of Object.entries(vars)) {
-    result = result.replace(new RegExp(`\\{\\{${k}\\}\\}`, "g"), v);
-  }
-  return result;
-}
-
-function getActivePrompt(settings: PaperDailySettings): string {
-  if (settings.promptLibrary && settings.activePromptId) {
-    const tpl = settings.promptLibrary.find(t => t.id === settings.activePromptId);
-    if (tpl) return tpl.prompt;
-  }
-  return settings.llm.dailyPromptTemplate; // fallback for existing users
-}
-
-function getActiveScoringPrompt(settings: PaperDailySettings): string {
-  if (settings.promptLibrary && settings.activeScorePromptId) {
-    const tpl = settings.promptLibrary.find(t => t.id === settings.activeScorePromptId);
-    if (tpl) return tpl.prompt;
-  }
-  return settings.scoringPromptTemplate ?? DEFAULT_SCORING_PROMPT;
 }
 
 function getActiveDeepReadPrompt(settings: PaperDailySettings): string {
