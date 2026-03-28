@@ -11,6 +11,7 @@ import { runBackfillPipeline } from "./pipeline/backfillPipeline";
 import { Scheduler } from "./scheduler/scheduler";
 import { ArxivSource } from "./sources/arxivSource";
 import { FloatingProgress } from "./ui/floatingProgress";
+import { RegenerateModal } from "./ui/regenerateModal";
 
 export default class PaperDailyPlugin extends Plugin {
   settings!: PaperDailySettings;
@@ -155,6 +156,12 @@ export default class PaperDailyPlugin extends Plugin {
           new Notice(`Paper Daily Error: ${String(err)}`);
         }
       }
+    });
+
+    this.addCommand({
+      id: "regenerate-digest",
+      name: "Regenerate AI digest for date",
+      callback: () => { new RegenerateModal(this.app, this).open(); }
     });
 
     this.addCommand({
