@@ -36,11 +36,17 @@ export async function regenerateDigest(
     throw new Error(`No daily note found for ${date}`);
   }
 
+  const file = app.vault.getAbstractFileByPath(inboxPath);
+  if (!(file instanceof TFile)) {
+    throw new Error(`Cannot get vault file for ${inboxPath}`);
+  }
+
   // Build LLM prompt (mirrors dailyPipeline.ts Step 4)
   progress(`Building prompt...`);
   const interestKeywords = settings.interestKeywords ?? [];
 
   const topK = Math.min(papers.length, 20);
+  // snapshot stores papers in ranked order (written by dailyPipeline Step 6)
   const topPapersForLLM = papers.slice(0, topK).map(p => ({
     id: p.id,
     title: p.title,
@@ -114,10 +120,6 @@ export async function regenerateDigest(
     newContent = before + newSection + after;
   }
 
-  const file = app.vault.getAbstractFileByPath(inboxPath);
-  if (!(file instanceof TFile)) {
-    throw new Error(`Cannot find vault file at ${inboxPath}`);
-  }
   await app.vault.modify(file, newContent);
 
   // Log
