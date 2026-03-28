@@ -16,7 +16,7 @@ export class RegenerateModal extends Modal {
     contentEl.empty();
     contentEl.createEl("h2", { text: "Regenerate AI Digest" });
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Date().toLocaleDateString("sv");
     let dateInput!: HTMLInputElement;
 
     new Setting(contentEl)
