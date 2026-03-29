@@ -28,7 +28,7 @@ __export(main_exports, {
   default: () => PaperDailyPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian6 = require("obsidian");
+var import_obsidian8 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian = require("obsidian");
@@ -4683,10 +4683,7 @@ var AnthropicProvider = class {
   }
 };
 
-// src/pipeline/dailyPipeline.ts
-function getISODate(d) {
-  return d.toISOString().slice(0, 10);
-}
+// src/pipeline/promptHelpers.ts
 function buildLLMProvider(settings) {
   if (settings.llm.provider === "anthropic") {
     return new AnthropicProvider(settings.llm.apiKey, settings.llm.model);
@@ -4716,6 +4713,16 @@ function getActiveScoringPrompt(settings) {
       return tpl.prompt;
   }
   return (_a2 = settings.scoringPromptTemplate) != null ? _a2 : DEFAULT_SCORING_PROMPT;
+}
+
+// src/pipeline/dailyPipeline.ts
+function localDateStr(d) {
+  return d.toLocaleDateString("sv");
+}
+function localYesterday() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return localDateStr(d);
 }
 function getActiveDeepReadPrompt(settings) {
   var _a2, _b;
@@ -4838,7 +4845,7 @@ async function runDailyPipeline(app, settings, stateStore, dedupStore, snapshotS
   var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I;
   const writer = new VaultWriter(app);
   const now = new Date();
-  const date = (_a2 = options.targetDate) != null ? _a2 : getISODate(now);
+  const date = (_a2 = options.targetDate) != null ? _a2 : localYesterday();
   const logPath = `${settings.rootFolder}/cache/runs.log`;
   const inboxPath = `${settings.rootFolder}/inbox/${date}.md`;
   const snapshotPath = `${settings.rootFolder}/papers/${date}.json`;
@@ -4916,7 +4923,7 @@ async function runDailyPipeline(app, settings, stateStore, dedupStore, snapshotS
       const lookback = (_j = (_i = settings.hfSource) == null ? void 0 : _i.lookbackDays) != null ? _j : 3;
       let hfFetchDate = date;
       for (let d = 0; d <= lookback; d++) {
-        const tryDate = d === 0 ? date : getISODate(new Date(new Date(date + "T12:00:00Z").getTime() - d * 864e5));
+        const tryDate = d === 0 ? date : localDateStr(new Date(new Date(date + "T12:00:00Z").getTime() - d * 864e5));
         const fetched = await hfSource.fetchForDate(tryDate);
         if (fetched.length > 0) {
           hfDailyPapers = fetched;
@@ -5408,7 +5415,7 @@ var Scheduler = class {
     if (now >= scheduledToday) {
       const lastRun = state.lastDailyRun ? new Date(state.lastDailyRun) : null;
       const alreadyRanToday = lastRun && isSameDay(now, lastRun);
-      const today = now.toISOString().slice(0, 10);
+      const today = localYesterday();
       if (!alreadyRanToday || !await this.callbacks.todayFileExists(today)) {
         await this.callbacks.onDaily();
       }
@@ -5496,8 +5503,180 @@ var FloatingProgress = class {
   }
 };
 
+// src/ui/regenerateModal.ts
+var import_obsidian7 = require("obsidian");
+
+// src/pipeline/regeneratePipeline.ts
+var import_obsidian6 = require("obsidian");
+async function regenerateDigest(app, settings, date, options) {
+  var _a2, _b, _c, _d;
+  const progress = (msg) => {
+    var _a3;
+    return (_a3 = options.onProgress) == null ? void 0 : _a3.call(options, msg);
+  };
+  const rootFolder = (_a2 = settings.rootFolder) != null ? _a2 : "PaperDaily";
+  const snapshotPath = `${rootFolder}/papers/${date}.json`;
+  const inboxPath = `${rootFolder}/inbox/${date}.md`;
+  progress(`Loading snapshot for ${date}...`);
+  let papers;
+  try {
+    const snapshotContent = await app.vault.adapter.read(snapshotPath);
+    const snapshot = JSON.parse(snapshotContent);
+    papers = (_b = snapshot.papers) != null ? _b : [];
+  } catch (e) {
+    throw new Error(`No snapshot found for ${date}`);
+  }
+  progress(`Loading daily note for ${date}...`);
+  let existingContent;
+  try {
+    existingContent = await app.vault.adapter.read(inboxPath);
+  } catch (e) {
+    throw new Error(`No daily note found for ${date}`);
+  }
+  const file = app.vault.getAbstractFileByPath(inboxPath);
+  if (!(file instanceof import_obsidian6.TFile)) {
+    throw new Error(`Cannot get vault file for ${inboxPath}`);
+  }
+  progress(`Building prompt...`);
+  const interestKeywords = (_c = settings.interestKeywords) != null ? _c : [];
+  const topK = Math.min(papers.length, 20);
+  const topPapersForLLM = papers.slice(0, topK).map((p) => {
+    var _a3;
+    return {
+      id: p.id,
+      title: p.title,
+      abstract: p.abstract.slice(0, 500),
+      categories: p.categories,
+      interestHits: (_a3 = p.interestHits) != null ? _a3 : [],
+      ...p.hfUpvotes ? { hfUpvotes: p.hfUpvotes } : {},
+      source: p.source,
+      published: p.published,
+      updated: p.updated,
+      links: p.links
+    };
+  });
+  const hfPapers = papers.filter((p) => p.source === "hf");
+  const hfForLLM = hfPapers.slice(0, 15).map((p) => {
+    var _a3;
+    return {
+      title: p.title,
+      hfUpvotes: (_a3 = p.hfUpvotes) != null ? _a3 : 0,
+      ...p.hfStreak && p.hfStreak > 1 ? { streakDays: p.hfStreak } : {}
+    };
+  });
+  const hfEnabled = ((_d = settings.hfSource) == null ? void 0 : _d.enabled) !== false && hfPapers.length > 0;
+  const hfDataSection = hfEnabled ? `Note: papers with "source": "hf" are HuggingFace-only picks. Treat them identically to arXiv papers.
+
+## HuggingFace Daily Papers (full list for reference, sorted by upvotes):
+${JSON.stringify(hfForLLM, null, 2)}` : "";
+  const hfSignalSection = hfEnabled ? `### HF \u793E\u533A\u4FE1\u53F7 / HF Community Signal
+From the HuggingFace full list, note any papers NOT already covered above. One line each: title + why the community is upvoting it + your take on whether it lives up to the hype.` : "";
+  const prompt2 = fillTemplate(getActivePrompt(settings), {
+    date,
+    papers_json: JSON.stringify(topPapersForLLM, null, 2),
+    hf_papers_json: JSON.stringify(hfForLLM, null, 2),
+    hf_data_section: hfDataSection,
+    hf_signal_section: hfSignalSection,
+    fulltext_section: "",
+    local_pdfs: "",
+    interest_keywords: interestKeywords.map((k) => `${k.keyword}(weight:${k.weight})`).join(", "),
+    language: settings.language === "zh" ? "Chinese (\u4E2D\u6587)" : "English"
+  });
+  let digestText;
+  progress(`Calling LLM (${settings.llm.model})...`);
+  try {
+    const llm = buildLLMProvider(settings);
+    const result = await llm.generate({
+      prompt: prompt2,
+      temperature: settings.llm.temperature,
+      maxTokens: settings.llm.maxTokens,
+      signal: options.signal
+    });
+    digestText = result.text;
+    progress(`LLM response received (${digestText.length} chars)`);
+  } catch (err) {
+    digestText = `> **Error**: ${String(err)}`;
+    progress(`LLM failed: ${String(err)}`);
+  }
+  const sectionHeader = `
+## \u4ECA\u65E5\u8981\u70B9`;
+  const sectionStart = existingContent.indexOf(sectionHeader);
+  const newSection = `
+## \u4ECA\u65E5\u8981\u70B9\uFF08AI \u603B\u7ED3\uFF09 | by ${settings.llm.model} \u8001\u5E08 \u{1F916}
+
+${digestText}`;
+  let newContent;
+  if (sectionStart === -1) {
+    newContent = existingContent + `
+
+## \u4ECA\u65E5\u8981\u70B9\uFF08AI \u603B\u7ED3\uFF09 | by ${settings.llm.model} \u8001\u5E08 \u{1F916}
+
+${digestText}`;
+  } else {
+    const nextSection = existingContent.indexOf("\n## ", sectionStart + 1);
+    const before = existingContent.slice(0, sectionStart);
+    const after = nextSection === -1 ? "" : existingContent.slice(nextSection);
+    newContent = before + newSection + after;
+  }
+  await app.vault.modify(file, newContent);
+  const writer = new VaultWriter(app);
+  const logPath = `${rootFolder}/cache/runs.log`;
+  const ts = new Date().toISOString();
+  const logLine = `
+[${ts}] === Regenerate digest date=${date} model=${settings.llm.model} digestLen=${digestText.length} ===
+`;
+  await writer.appendLogWithRotation(logPath, logLine, 512 * 1024);
+  progress(`Done \u2014 digest regenerated for ${date}`);
+}
+
+// src/ui/regenerateModal.ts
+var RegenerateModal = class extends import_obsidian7.Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "Regenerate AI Digest" });
+    const today = new Date().toLocaleDateString("sv");
+    let dateInput;
+    new import_obsidian7.Setting(contentEl).setName("Date").addText((text) => {
+      dateInput = text.inputEl;
+      dateInput.type = "date";
+      dateInput.value = today;
+    });
+    new import_obsidian7.Setting(contentEl).addButton((btn) => btn.setButtonText("Cancel").onClick(() => this.close())).addButton((btn) => btn.setButtonText("Regenerate").setCta().onClick(() => {
+      const date = dateInput.value;
+      if (!date)
+        return;
+      this.close();
+      const controller = new AbortController();
+      const fp = new FloatingProgress(() => {
+        controller.abort();
+        fp.setMessage("Stopping...");
+      }, "Regenerating AI Digest");
+      regenerateDigest(this.app, this.plugin.settings, date, {
+        signal: controller.signal,
+        onProgress: (msg) => fp.setMessage(msg)
+      }).then(() => {
+        fp.setMessage("Done.");
+        new import_obsidian7.Notice("Paper Daily: Digest regenerated for " + date);
+        setTimeout(() => fp.destroy(), 3e3);
+      }).catch((err) => {
+        fp.setMessage("Error: " + err.message);
+        new import_obsidian7.Notice("Paper Daily Error: " + err.message);
+        setTimeout(() => fp.destroy(), 6e3);
+      });
+    }));
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+
 // src/main.ts
-var PaperDailyPlugin = class extends import_obsidian6.Plugin {
+var PaperDailyPlugin = class extends import_obsidian8.Plugin {
   constructor() {
     super(...arguments);
     this.activeAbortController = null;
@@ -5541,8 +5720,8 @@ var PaperDailyPlugin = class extends import_obsidian6.Plugin {
   }
   async loadSettingsFromVaultFile() {
     try {
-      const file = this.app.vault.getAbstractFileByPath((0, import_obsidian6.normalizePath)(this.configFilePath));
-      if (!(file instanceof import_obsidian6.TFile))
+      const file = this.app.vault.getAbstractFileByPath((0, import_obsidian8.normalizePath)(this.configFilePath));
+      if (!(file instanceof import_obsidian8.TFile))
         return;
       const content = await this.app.vault.read(file);
       const vaultSettings = JSON.parse(content);
@@ -5610,13 +5789,20 @@ var PaperDailyPlugin = class extends import_obsidian6.Plugin {
       id: "rebuild-index",
       name: "Rebuild index from local cache",
       callback: async () => {
-        new import_obsidian6.Notice("Paper Daily: Rebuilding dedup index...");
+        new import_obsidian8.Notice("Paper Daily: Rebuilding dedup index...");
         try {
           await this.dedupStore.load();
-          new import_obsidian6.Notice("Paper Daily: Index rebuilt.");
+          new import_obsidian8.Notice("Paper Daily: Index rebuilt.");
         } catch (err) {
-          new import_obsidian6.Notice(`Paper Daily Error: ${String(err)}`);
+          new import_obsidian8.Notice(`Paper Daily Error: ${String(err)}`);
         }
+      }
+    });
+    this.addCommand({
+      id: "regenerate-digest",
+      name: "Regenerate AI digest for date",
+      callback: () => {
+        new RegenerateModal(this.app, this).open();
       }
     });
     this.addCommand({
@@ -5641,7 +5827,7 @@ var PaperDailyPlugin = class extends import_obsidian6.Plugin {
   /** Run daily pipeline with floating UI and stop button. */
   async runDailyWithUI() {
     if (this.activeAbortController) {
-      new import_obsidian6.Notice("Paper Daily: \u4EFB\u52A1\u5DF2\u5728\u8FD0\u884C\u4E2D\u3002");
+      new import_obsidian8.Notice("Paper Daily: \u4EFB\u52A1\u5DF2\u5728\u8FD0\u884C\u4E2D\u3002");
       return;
     }
     const controller = new AbortController();
@@ -5672,7 +5858,7 @@ var PaperDailyPlugin = class extends import_obsidian6.Plugin {
   }
   /** Called once on startup: silently generate today's file if it is missing. */
   async runTodayIfMissing() {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localYesterday();
     if (await this.todayFileExists(today))
       return;
     void this.runDailyWithUI();
@@ -5706,7 +5892,7 @@ var PaperDailyPlugin = class extends import_obsidian6.Plugin {
   /** Run backfill pipeline with floating UI and stop button. */
   async runBackfillWithUI(startDate, endDate) {
     if (this.activeBackfillController) {
-      new import_obsidian6.Notice("Paper Daily: \u6279\u91CF\u751F\u6210\u5DF2\u5728\u8FD0\u884C\u4E2D\u3002");
+      new import_obsidian8.Notice("Paper Daily: \u6279\u91CF\u751F\u6210\u5DF2\u5728\u8FD0\u884C\u4E2D\u3002");
       return;
     }
     const controller = new AbortController();
@@ -5756,7 +5942,7 @@ var PaperDailyPlugin = class extends import_obsidian6.Plugin {
     }
   }
 };
-var BackfillModal = class extends import_obsidian6.Modal {
+var BackfillModal = class extends import_obsidian8.Modal {
   constructor(app, plugin) {
     super(app);
     this.plugin = plugin;
@@ -5771,19 +5957,19 @@ var BackfillModal = class extends import_obsidian6.Modal {
     lastWeek.setDate(today.getDate() - 7);
     let startInput;
     let endInput;
-    new import_obsidian6.Setting(contentEl).setName("\u5F00\u59CB\u65E5\u671F / Start Date").addText((text) => {
+    new import_obsidian8.Setting(contentEl).setName("\u5F00\u59CB\u65E5\u671F / Start Date").addText((text) => {
       startInput = text.inputEl;
       startInput.type = "date";
       startInput.value = fmt(lastWeek);
     });
-    new import_obsidian6.Setting(contentEl).setName("\u7ED3\u675F\u65E5\u671F / End Date").addText((text) => {
+    new import_obsidian8.Setting(contentEl).setName("\u7ED3\u675F\u65E5\u671F / End Date").addText((text) => {
       endInput = text.inputEl;
       endInput.type = "date";
       endInput.value = fmt(today);
     });
     const errorEl = contentEl.createEl("p");
     errorEl.style.cssText = "color:var(--text-error);font-size:0.85em;margin:8px 0 0;min-height:1.2em;";
-    new import_obsidian6.Setting(contentEl).addButton((btn) => btn.setButtonText("\u53D6\u6D88").onClick(() => this.close())).addButton((btn) => btn.setButtonText("\u5F00\u59CB\u751F\u6210").setCta().onClick(() => {
+    new import_obsidian8.Setting(contentEl).addButton((btn) => btn.setButtonText("\u53D6\u6D88").onClick(() => this.close())).addButton((btn) => btn.setButtonText("\u5F00\u59CB\u751F\u6210").setCta().onClick(() => {
       const start = startInput.value;
       const end = endInput.value;
       if (!start || !end) {

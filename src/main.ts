@@ -6,7 +6,7 @@ import { StateStore } from "./storage/stateStore";
 import { DedupStore } from "./storage/dedupStore";
 import { SnapshotStore } from "./storage/snapshotStore";
 import { HFTrackStore } from "./storage/hfTrackStore";
-import { runDailyPipeline, PipelineAbortError } from "./pipeline/dailyPipeline";
+import { runDailyPipeline, PipelineAbortError, localYesterday } from "./pipeline/dailyPipeline";
 import { runBackfillPipeline } from "./pipeline/backfillPipeline";
 import { Scheduler } from "./scheduler/scheduler";
 import { ArxivSource } from "./sources/arxivSource";
@@ -223,7 +223,7 @@ export default class PaperDailyPlugin extends Plugin {
 
   /** Called once on startup: silently generate today's file if it is missing. */
   private async runTodayIfMissing(): Promise<void> {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localYesterday();
     if (await this.todayFileExists(today)) return;
     void this.runDailyWithUI();
   }

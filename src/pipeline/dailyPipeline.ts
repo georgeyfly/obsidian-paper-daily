@@ -14,8 +14,14 @@ import type { HFTrackStore } from "../storage/hfTrackStore";
 import { DEFAULT_DEEP_READ_PROMPT } from "../settings";
 import { buildLLMProvider, fillTemplate, getActivePrompt, getActiveScoringPrompt } from "./promptHelpers";
 
-function getISODate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+export function localDateStr(d: Date): string {
+  return d.toLocaleDateString("sv");
+}
+
+export function localYesterday(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return localDateStr(d);
 }
 
 function getActiveDeepReadPrompt(settings: PaperDailySettings): string {
@@ -181,7 +187,7 @@ export async function runDailyPipeline(
 ): Promise<void> {
   const writer = new VaultWriter(app);
   const now = new Date();
-  const date = options.targetDate ?? getISODate(now);
+  const date = options.targetDate ?? localYesterday();
   const logPath = `${settings.rootFolder}/cache/runs.log`;
   const inboxPath = `${settings.rootFolder}/inbox/${date}.md`;
   const snapshotPath = `${settings.rootFolder}/papers/${date}.json`;
@@ -268,7 +274,7 @@ export async function runDailyPipeline(
       // Try today first; if empty (e.g. weekend/holiday), look back up to lookbackDays
       for (let d = 0; d <= lookback; d++) {
         const tryDate = d === 0 ? date
-          : getISODate(new Date(new Date(date + "T12:00:00Z").getTime() - d * 86400000));
+          : localDateStr(new Date(new Date(date + "T12:00:00Z").getTime() - d * 86400000));
         const fetched = await hfSource.fetchForDate(tryDate);
         if (fetched.length > 0) {
           hfDailyPapers = fetched;

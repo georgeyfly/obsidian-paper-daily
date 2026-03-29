@@ -1,5 +1,6 @@
 import type { PaperDailySettings } from "../types/config";
 import type { StateStore } from "../storage/stateStore";
+import { localYesterday } from "../pipeline/dailyPipeline";
 
 interface SchedulerCallbacks {
   onDaily: () => Promise<void>;
@@ -66,7 +67,7 @@ export class Scheduler {
     if (now >= scheduledToday) {
       const lastRun = state.lastDailyRun ? new Date(state.lastDailyRun) : null;
       const alreadyRanToday = lastRun && isSameDay(now, lastRun);
-      const today = now.toISOString().slice(0, 10);
+      const today = localYesterday();
       // Run if not run today, or if the output file was deleted since last run.
       if (!alreadyRanToday || !(await this.callbacks.todayFileExists(today))) {
         await this.callbacks.onDaily();
