@@ -428,6 +428,12 @@ TypeScript · Obsidian API · esbuild · arXiv Atom API · HuggingFace Papers ·
 
 ---
 
+### Acknowledgements
+
+This project was initially forked from [ChenghaoMou/paper-daily](https://github.com/ChenghaoMou/paper-daily). Thanks for the original work.
+
+---
+
 ### License
 
 MIT
