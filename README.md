@@ -59,45 +59,37 @@ PaperDaily/
 
 ### 安装
 
-#### 方法一：直接复制文件（推荐）
+#### 第一步：准备一个 Obsidian Vault（笔记库）
 
-1. 前往本仓库 [Releases](../../releases) 页面，下载最新版本的以下文件：
-   - `main.js`
-   - `manifest.json`
-   - `styles.css`（如有）
+插件生成的每日摘要会写入 Obsidian Vault 中的 `PaperDaily/` 文件夹。如果你还没有 Vault：
 
-2. 在你的 Obsidian Vault 中创建插件目录（如不存在）：
-   ```
-   <你的 Vault>/.obsidian/plugins/paper-daily/
-   ```
+1. 在本地新建一个空文件夹，例如 `~/Desktop/paper-daily`
+2. 打开 Obsidian → **打开另一个库（Open another vault）** → **以文件夹作为库打开（Open folder as vault）** → 选择刚才新建的文件夹
 
-3. 将上述文件复制到该目录：
-   ```
-   .obsidian/plugins/paper-daily/
-   ├── main.js
-   ├── manifest.json
-   └── styles.css
-   ```
+#### 第二步：安装插件
 
-4. 打开 Obsidian → 设置 → 第三方插件，关闭「安全模式」，然后启用 **Paper Daily**。
-
-> macOS 路径示例：`~/Documents/MyVault/.obsidian/plugins/paper-daily/`
-> Windows 路径示例：`C:\Users\你的用户名\Documents\MyVault\.obsidian\plugins\paper-daily\`
-
-#### 方法二：开发者本地构建
+克隆仓库并构建：
 
 ```bash
-git clone https://github.com/your-username/paper-daily.git
-cd paper-daily
+git clone https://github.com/georgeyfly/obsidian-paper-daily.git
+cd obsidian-paper-daily
 npm install
 npm run build
 ```
 
-将 `main.js` 和 `manifest.json` 复制到 Vault 插件目录，或使用符号链接：
+在 Vault 中创建插件目录，并用符号链接指向仓库（macOS / Linux）：
 
 ```bash
-ln -s $(pwd) ~/path/to/your/vault/.obsidian/plugins/paper-daily
+mkdir -p ~/Desktop/paper-daily/.obsidian/plugins
+ln -s $(pwd) ~/Desktop/paper-daily/.obsidian/plugins/paper-daily
 ```
+
+> Windows 用户：用管理员权限在命令提示符中执行
+> `mklink /D "%USERPROFILE%\Desktop\paper-daily\.obsidian\plugins\paper-daily" "%CD%"`
+
+#### 第三步：在 Obsidian 中启用
+
+打开 Obsidian → 设置 → 第三方插件 → 关闭「安全模式」→ 找到 **Paper Daily** → 启用。
 
 ---
 
