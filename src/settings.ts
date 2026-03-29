@@ -104,6 +104,7 @@ Generate the daily digest with the following sections:
 3–5 punchy bullet points. What actually moved the needle today vs what is incremental noise? Be direct.
 
 ### 精选论文 / Curated Papers
+Output papers sorted by 价值评级 descending (★★★★★ first, ★☆☆☆☆ last).
 For **each paper** in the papers list, output exactly this structure:
 
 **[N]. {title}**
