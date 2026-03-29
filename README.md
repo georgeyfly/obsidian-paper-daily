@@ -9,7 +9,8 @@
 ## 中文说明
 
 ### To Do
-- [ ] influencer https://github.com/zarazhangrui/follow-builders, alphaxiv
+- [ ] influencer https://github.com/zarazhangrui/follow-builders
+- [ ] add top conference paper recommends section from papers.cool and/or papercopilot.com as paper candidate sources for top-venue conference papers (e.g., NeurIPS, ICML, CVPR, ACL), don't repeat already fetched papers
 
 ### 简介
 
