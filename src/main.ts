@@ -6,8 +6,9 @@ import { StateStore } from "./storage/stateStore";
 import { DedupStore } from "./storage/dedupStore";
 import { SnapshotStore } from "./storage/snapshotStore";
 import { HFTrackStore } from "./storage/hfTrackStore";
-import { runDailyPipeline, PipelineAbortError, localYesterday } from "./pipeline/dailyPipeline";
+import { runDailyPipeline, PipelineAbortError, localYesterday, localDateStr } from "./pipeline/dailyPipeline";
 import { runBackfillPipeline } from "./pipeline/backfillPipeline";
+import { runConferencePipeline } from "./pipeline/conferencePipeline";
 import { Scheduler } from "./scheduler/scheduler";
 import { ArxivSource } from "./sources/arxivSource";
 import { FloatingProgress } from "./ui/floatingProgress";
@@ -60,6 +61,22 @@ export default class PaperDailyPlugin extends Plugin {
     this.settings.language = locale.startsWith("zh") ? "zh" : "en";
     // Load from vault config file (overrides data.json if file exists)
     await this.loadSettingsFromVaultFile();
+    // Migrate conferenceSource after all settings are loaded (runs last to avoid being overwritten)
+    this.settings.conferenceSource = Object.assign({}, DEFAULT_SETTINGS.conferenceSource, this.settings.conferenceSource);
+    if (this.settings.conferenceSource?.conferences) {
+      for (const conf of this.settings.conferenceSource.conferences) {
+        if (conf.fromYear === undefined) {
+          const legacyYears = (conf as unknown as { years?: number[] }).years;
+          conf.fromYear = legacyYears?.length ? Math.min(...legacyYears) : 2024;
+        }
+      }
+      const existingKeys = new Set(this.settings.conferenceSource.conferences.map(c => c.key));
+      for (const def of DEFAULT_SETTINGS.conferenceSource.conferences) {
+        if (!existingKeys.has(def.key)) {
+          this.settings.conferenceSource.conferences.push({ ...def });
+        }
+      }
+    }
   }
 
   async saveSettings(): Promise<void> {
@@ -162,6 +179,12 @@ export default class PaperDailyPlugin extends Plugin {
       id: "regenerate-digest",
       name: "Regenerate AI digest for date",
       callback: () => { new RegenerateModal(this.app, this).open(); }
+    });
+
+    this.addCommand({
+      id: "fetch-conference-papers",
+      name: "Fetch & append conference papers to today's report",
+      callback: () => { void this.runConferenceWithUI(); }
     });
 
     this.addCommand({
@@ -283,6 +306,29 @@ export default class PaperDailyPlugin extends Plugin {
       }
     } finally {
       this.activeBackfillController = null;
+    }
+  }
+
+  async runConferenceWithUI(): Promise<void> {
+    const today = localDateStr(new Date());
+    const fp = new FloatingProgress(() => {
+      fp.setMessage("⏹ 正在停止...");
+    }, "📚 会议论文");
+    try {
+      await runConferencePipeline(this.app, this.settings, {
+        date: today,
+        onProgress: (msg) => fp.setMessage(msg)
+      });
+      fp.setMessage("✅ 完成！");
+      setTimeout(() => fp.destroy(), 3000);
+    } catch (err) {
+      if (err instanceof PipelineAbortError) {
+        fp.setMessage("⏹ 已停止。");
+        setTimeout(() => fp.destroy(), 2000);
+      } else {
+        fp.setMessage(`❌ 错误: ${String(err)}`);
+        setTimeout(() => fp.destroy(), 6000);
+      }
     }
   }
 

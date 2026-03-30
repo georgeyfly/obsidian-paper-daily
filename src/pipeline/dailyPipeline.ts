@@ -7,12 +7,13 @@ import { DedupStore } from "../storage/dedupStore";
 import { SnapshotStore } from "../storage/snapshotStore";
 import { ArxivSource } from "../sources/arxivSource";
 import { HFSource } from "../sources/hfSource";
+import { ConferencePaperSource } from "../sources/conferencePaperSource";
 import { rankPapers } from "../scoring/rank";
 import { computeInterestHits } from "../scoring/interest";
 import type { LLMProvider } from "../llm/provider";
 import type { HFTrackStore } from "../storage/hfTrackStore";
 import { DEFAULT_DEEP_READ_PROMPT } from "../settings";
-import { buildLLMProvider, fillTemplate, getActivePrompt, getActiveScoringPrompt } from "./promptHelpers";
+import { buildLLMProvider, fillTemplate, getActivePrompt, getActiveScoringPrompt, getActiveConfScoringPrompt } from "./promptHelpers";
 
 export function localDateStr(d: Date): string {
   return d.toLocaleDateString("sv");
@@ -69,6 +70,43 @@ function buildDeepReadFileName(
   return result.replace(/[/\\:*?"<>|]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || baseId;
 }
 
+function buildConferencePapersSection(papers: Paper[]): string {
+  if (papers.length === 0) return "";
+  const venues = [...new Set(papers.map(p =>
+    p.conferenceVenue ? `${p.conferenceVenue} ${p.conferenceYear ?? ""}`.trim() : ""
+  ).filter(Boolean))].join(" · ");
+
+  const lines: string[] = [`## 会议论文推荐 / Conference Papers`, ""];
+  if (venues) lines.push(`> ${venues}`, "");
+
+  papers.forEach((p, i) => {
+    const scoreStr = p.llmScore !== undefined ? ` ⭐ ${p.llmScore}/10` : "";
+    const reasonStr = p.llmScoreReason ? ` — ${p.llmScoreReason}` : "";
+    const status = p.paperStatus ? p.paperStatus.charAt(0).toUpperCase() + p.paperStatus.slice(1).toLowerCase() : "";
+    const venueLine = [
+      p.conferenceVenue ? `${p.conferenceVenue} ${p.conferenceYear ?? ""}`.trim() : "",
+      status
+    ].filter(Boolean).join(" · ");
+    const hits = (p.interestHits ?? []).join(", ");
+    const hitsStr = hits ? ` | hits: ${hits}` : "";
+    const arxivId = p.id.replace(/^arxiv:/i, "").replace(/v\d+$/i, "");
+    const arxivUrl = p.links?.html ?? (arxivId.startsWith("conf:") ? "" : `https://arxiv.org/abs/${arxivId}`);
+    const linkParts: string[] = [];
+    if (arxivUrl) linkParts.push(`[arXiv](${arxivUrl})`);
+    if (p.links?.pdf) linkParts.push(`[PDF](${p.links.pdf})`);
+    const linksStr = linkParts.length ? ` · ${linkParts.join(" · ")}` : "";
+    const authors = p.authors.slice(0, 3).join(", ") + (p.authors.length > 3 ? " et al." : "");
+
+    lines.push(`${i + 1}. **${p.title}**${scoreStr}${reasonStr}`);
+    if (venueLine || hitsStr) lines.push(`   ${venueLine}${hitsStr}`);
+    if (p.llmSummary) lines.push(`   ${p.llmSummary}`);
+    if (authors) lines.push(`   ${authors}${linksStr}`);
+    lines.push("");
+  });
+
+  return lines.join("\n");
+}
+
 function buildDailyMarkdown(
   date: string,
   settings: PaperDailySettings,
@@ -76,6 +114,7 @@ function buildDailyMarkdown(
   aiDigest: string,
   activeSources: string[],
   interestHotnessSection: string,
+  confScoredPapers: Paper[],
   error?: string
 ): string {
   const frontmatter = [
@@ -151,10 +190,13 @@ function buildDailyMarkdown(
     ...(tableRows.length > 0 ? tableRows : ["| — | _No papers_ | | | | |"])
   ].join("\n");
 
+  const confSection = buildConferencePapersSection(confScoredPapers);
+
   const sections = [frontmatter, "", header];
   if (interestHotnessSection) sections.push("", interestHotnessSection);
   sections.push("", digestSection);
   if (featuredPapersSection) sections.push("", featuredPapersSection);
+  if (confSection) sections.push("", confSection);
   sections.push("", allPapersTableSection);
   return sections.join("\n");
 }
@@ -225,6 +267,7 @@ export async function runDailyPipeline(
 
   let papers: Paper[] = [];
   let hfDailyPapers: Paper[] = [];
+  let confPapers: Paper[] = [];
   let fetchError: string | undefined;
   let llmDigest = "";
   let llmError: string | undefined;
@@ -332,6 +375,68 @@ export async function runDailyPipeline(
     }
   } else {
     log(`Step 1b HF FETCH: skipped (disabled)`);
+  }
+
+  // ── Step 1c: Conference Papers (papercopilot) ──────────────────
+  checkAbort();
+  if (settings.conferenceSource?.enabled) {
+    progress(`[1/5] 🎓 拉取会议论文...`);
+    try {
+      const confSource = new ConferencePaperSource(app);
+      const enabledConfs = (settings.conferenceSource.conferences ?? []).filter(c => c.enabled);
+      const currentYear = new Date().getFullYear();
+
+      for (const conf of enabledConfs) {
+        for (let year = conf.fromYear; year <= currentYear + 1; year++) {
+          try {
+            const raw = await confSource.fetchConference(settings, conf, year);
+            const filtered = confSource.filterAndRank(raw, settings);
+            confPapers.push(...filtered);
+            log(`Step 1c CONF: ${conf.name} ${year} → ${raw.length} total, ${filtered.length} after filter`);
+          } catch (err) {
+            // 404 or missing year — silently skip
+            log(`Step 1c CONF: ${conf.name} ${year} not available, skipping`);
+          }
+        }
+      }
+
+      if (confPapers.length > 0) {
+        activeSources.push("conference");
+
+        // Build base-ID index of already-fetched papers to avoid duplicates
+        const existingBaseIds = new Set(
+          papers.map(p => p.id.replace(/^arxiv:/i, "").replace(/v\d+$/i, ""))
+        );
+
+        let enrichedCount = 0;
+        let addedCount = 0;
+        for (const cp of confPapers) {
+          const cpBase = cp.id.replace(/^arxiv:/i, "").replace(/v\d+$/i, "");
+          const matchingPaper = papers.find(p =>
+            p.id.replace(/^arxiv:/i, "").replace(/v\d+$/i, "") === cpBase
+          );
+          if (matchingPaper) {
+            // Enrich existing paper with conference metadata
+            if (!matchingPaper.conferenceVenue) {
+              matchingPaper.conferenceVenue = cp.conferenceVenue;
+              matchingPaper.conferenceYear = cp.conferenceYear;
+              matchingPaper.paperStatus = cp.paperStatus;
+              matchingPaper.citations = cp.citations;
+              enrichedCount++;
+            }
+          } else if (!existingBaseIds.has(cpBase)) {
+            papers.push(cp);
+            existingBaseIds.add(cpBase);
+            addedCount++;
+          }
+        }
+        log(`Step 1c CONF MERGE: enriched=${enrichedCount} arXiv papers, added=${addedCount} conf-only papers`);
+      }
+    } catch (err) {
+      log(`[ERROR][CONF] error=${String(err)} (non-fatal, continuing)`);
+    }
+  } else {
+    log(`Step 1c CONF: skipped (disabled)`);
   }
 
   // ── Step 2: Dedup ─────────────────────────────────────────────
@@ -446,6 +551,72 @@ export async function runDailyPipeline(
     log(`Step 3b LLM SCORE: skipped (${rankedPapers.length === 0 ? "0 papers" : "no API key"})`);
   }
 
+  // ── Step 3c: Conference paper scoring (conf-specific prompt) ─────
+  const confScoredPapers: Paper[] = rankedPapers.filter(p => p.source === "conference");
+  if (confScoredPapers.length > 0 && settings.llm.apiKey) {
+    checkAbort();
+    const BATCH_SIZE = 10;
+    const confScoringTemplate = getActiveConfScoringPrompt(settings);
+    const kwStr = interestKeywords.map(k => `${k.keyword}(weight:${k.weight})`).join(", ");
+    const llm = buildLLMProvider(settings);
+    const normalizeId = (id: string) => id.replace(/^arxiv:/i, "").replace(/v\d+$/i, "").toLowerCase().trim();
+    let confScored = 0;
+
+    for (let i = 0; i < confScoredPapers.length; i += BATCH_SIZE) {
+      checkAbort();
+      const batch = confScoredPapers.slice(i, i + BATCH_SIZE);
+      progress(`[3c] 🏛 会议论文评分 (${i + 1}–${i + batch.length} / ${confScoredPapers.length})...`);
+
+      const papersForScoring = batch.map(p => ({
+        id: p.id,
+        title: p.title,
+        abstract: p.abstract.slice(0, 250),
+        interestHits: p.interestHits ?? [],
+        conferenceVenue: p.conferenceVenue,
+        conferenceYear: p.conferenceYear,
+        paperStatus: p.paperStatus
+      }));
+      const maxTokens = Math.min(batch.length * 150 + 256, 8192);
+      const prompt = fillTemplate(confScoringTemplate, {
+        interest_keywords: kwStr,
+        papers_json: JSON.stringify(papersForScoring)
+      });
+
+      try {
+        const result = await llm.generate({ prompt, temperature: 0.1, maxTokens, signal: options.signal });
+        if (result.usage) trackUsage("Step 3c conf scoring", result.usage.inputTokens, result.usage.outputTokens);
+        const jsonMatch = result.text.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          const scores: Array<{ id: string; score: number; reason: string; summary?: string }> = JSON.parse(jsonMatch[0]);
+          const scoreMap = new Map(scores.map(s => [normalizeId(s.id), s]));
+          for (const paper of batch) {
+            const s = scoreMap.get(normalizeId(paper.id));
+            if (s) {
+              paper.llmScore = s.score;
+              paper.llmScoreReason = s.reason;
+              if (s.summary) paper.llmSummary = s.summary;
+              confScored++;
+            }
+          }
+        }
+      } catch (err) {
+        log(`[ERROR][CONF SCORE] batch error: ${String(err)} (non-fatal)`);
+      }
+    }
+
+    confScoredPapers.sort((a, b) => (b.llmScore ?? 0) - (a.llmScore ?? 0));
+    log(`Step 3c CONF SCORE: ${confScored}/${confScoredPapers.length} papers scored`);
+  } else if (confScoredPapers.length > 0) {
+    log(`Step 3c CONF SCORE: skipped (no API key)`);
+  }
+
+  // Apply daily cap across all conference papers
+  const maxTotalPerDay = settings.conferenceSource?.maxTotalPerDay ?? 5;
+  if (confScoredPapers.length > maxTotalPerDay) {
+    confScoredPapers.splice(maxTotalPerDay);
+    log(`Step 3c CONF CAP: trimmed to ${maxTotalPerDay} papers`);
+  }
+
   // ── Step 3f: Deep Read — per-paper LLM analysis via arxiv HTML URL ───
   let fulltextSection = "";
   if (settings.deepRead?.enabled && rankedPapers.length > 0 && settings.llm.apiKey) {
@@ -554,7 +725,8 @@ export async function runDailyPipeline(
         source: p.source,
         published: p.published,
         updated: p.updated,
-        links: p.links
+        links: p.links,
+        ...(p.conferenceVenue ? { conferenceVenue: p.conferenceVenue, conferenceYear: p.conferenceYear, paperStatus: p.paperStatus, citations: p.citations } : {}),
       }));
       const hfForLLM = hfDailyPapers.slice(0, 15).map(p => ({
         title: p.title,
@@ -570,12 +742,21 @@ export async function runDailyPipeline(
         ? `### HF 社区信号 / HF Community Signal\nFrom the HuggingFace full list, note any papers NOT already covered above. One line each: title + why the community is upvoting it + your take on whether it lives up to the hype.`
         : "";
 
+      const confEnabled = settings.conferenceSource?.enabled && confPapers.length > 0;
+      const confVenues = confEnabled
+        ? [...new Set(confPapers.map(p => `${p.conferenceVenue} ${p.conferenceYear}`))].join(", ")
+        : "";
+      const confSection = confEnabled
+        ? `Note: some papers have "source": "conference" — these are accepted papers from top venues (${confVenues}). conferenceVenue, conferenceYear, paperStatus (Oral/Spotlight/Poster), and citations fields indicate venue context. Weight Oral/Spotlight papers more heavily unless keyword relevance is low.`
+        : "";
+
       const prompt = fillTemplate(getActivePrompt(settings), {
         date,
         papers_json: JSON.stringify(topPapersForLLM, null, 2),
         hf_papers_json: JSON.stringify(hfForLLM, null, 2),
         hf_data_section: hfDataSection,
         hf_signal_section: hfSignalSection,
+        conf_section: confSection,
         fulltext_section: fulltextSection,
         local_pdfs: "",
         interest_keywords: interestKeywords.map(k => `${k.keyword}(weight:${k.weight})`).join(", "),
@@ -656,7 +837,7 @@ export async function runDailyPipeline(
       }
     }
 
-    const markdown = buildDailyMarkdown(date, settings, rankedPapers, llmDigest, activeSources, interestHotnessSection, errorMsg);
+    const markdown = buildDailyMarkdown(date, settings, rankedPapers, llmDigest, activeSources, interestHotnessSection, confScoredPapers, errorMsg);
     await writer.writeNote(inboxPath, markdown);
     log(`Step 5 WRITE: markdown written to ${inboxPath}`);
   } catch (err) {

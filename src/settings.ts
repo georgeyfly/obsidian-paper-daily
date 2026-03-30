@@ -92,6 +92,8 @@ Output language: {{language}}
 
 {{hf_data_section}}
 
+{{conf_section}}
+
 {{fulltext_section}}
 
 ---
@@ -109,6 +111,7 @@ For **each paper** in the papers list, output exactly this structure:
 
 **[N]. {title}**
 - ⭐ 价值评级: {★★★★★ to ★☆☆☆☆}  ({one-phrase reason})
+- 📍 来源: {if source=="conference": "{conferenceVenue} {conferenceYear} · {paperStatus}" else: source field}
 - 关键词: {interest hits}
 - 🤗 HF 热度: {hfUpvotes} 赞  ← **only include this line if hfUpvotes > 0 for this paper; omit entirely otherwise**
 - 💡 核心贡献: one sentence — what exactly did they do / prove / build? Be specific with method names and key numbers.
@@ -142,7 +145,8 @@ Rules:
 - 工程启示 must be actionable — not "this is interesting" but "you can use X to achieve Y in your system".
 - Recommendations must be specific — no "interesting direction" hedging.
 - If fulltext_section is non-empty, you MUST use those deep-read notes to enrich the analysis of the corresponding papers. Do not ignore them.
-- HuggingFace papers in papers_json must receive the same full analysis treatment as arXiv papers.`;
+- HuggingFace papers in papers_json must receive the same full analysis treatment as arXiv papers.
+- For papers with source=="conference": always show the 📍 来源 line as "{conferenceVenue} {conferenceYear} · {paperStatus}". In 工程启示, explain **why this specific paper is worth reading now** despite being from a past conference — what has changed in the field that makes it newly relevant, or why it was overlooked.`;
 
 export const DEFAULT_SCORING_PROMPT = `Score each paper 1–10 for quality and relevance to the user's interests.
 
@@ -206,10 +210,27 @@ One sentence: what they built/proved + the single most important result number.
 Output language: {{language}}
 Aim for 400–600 words total. Do not copy the abstract verbatim — synthesize.`;
 
+export const DEFAULT_CONF_SCORING_PROMPT = `Score each conference paper 1–10 for quality and relevance to the user's interests.
+
+User's interest keywords (higher weight = more important): {{interest_keywords}}
+
+Scoring criteria:
+- Alignment with interest keywords and their weights
+- Technical novelty and long-term significance (conference papers may be 1–2 years old)
+- Practical engineering value today — has this approach been adopted or superseded?
+- Acceptance tier bonus: Oral > Spotlight > Poster
+
+Return ONLY a valid JSON array, no explanation, no markdown fence:
+[{"id":"...","score":8,"reason":"one short phrase — why worth reading now","summary":"1–2 sentence plain-language summary"},...]
+
+Papers:
+{{papers_json}}`;
+
 export const DEFAULT_PROMPT_LIBRARY: PromptTemplate[] = [
   { id: "builtin_engineering", name: "每日trending", type: "daily", prompt: DEFAULT_DAILY_PROMPT, builtin: true },
   { id: "builtin_scoring", name: "批量评分", type: "scoring", prompt: DEFAULT_SCORING_PROMPT, builtin: true },
   { id: "builtin_deepread", name: "全文精读", type: "deepread", prompt: DEFAULT_DEEP_READ_PROMPT, builtin: true },
+  { id: "builtin_conf_scoring", name: "会议评分", type: "conf_scoring", prompt: DEFAULT_CONF_SCORING_PROMPT, builtin: true },
 ];
 
 
@@ -264,6 +285,26 @@ export const DEFAULT_SETTINGS: PaperDailySettings = {
     feeds: []
   },
 
+  conferenceSource: {
+    enabled: false,
+    conferences: [
+      { name: "NeurIPS", key: "nips",  fromYear: 2024, enabled: true },
+      { name: "ICML",    key: "icml",  fromYear: 2024, enabled: true },
+      { name: "ICLR",    key: "iclr",  fromYear: 2024, enabled: true },
+      { name: "CVPR",    key: "cvpr",  fromYear: 2024, enabled: false },
+      { name: "ECCV",    key: "eccv",  fromYear: 2024, enabled: false },
+      { name: "ICCV",    key: "iccv",  fromYear: 2023, enabled: false },
+      { name: "ACL",     key: "acl",   fromYear: 2024, enabled: false },
+      { name: "EMNLP",   key: "emnlp", fromYear: 2024, enabled: false },
+      { name: "CoRL",    key: "corl",  fromYear: 2024, enabled: false },
+      { name: "AAAI",    key: "aaai",  fromYear: 2024, enabled: false },
+    ],
+    maxPerConference: 20,
+    maxTotalPerDay: 5,
+    cacheRefreshDays: 7,
+    includeStatuses: ["Oral", "Spotlight", "Poster"],
+  },
+
   deepRead: {
     enabled: false,
     topN: 10,
@@ -277,6 +318,7 @@ export const DEFAULT_SETTINGS: PaperDailySettings = {
   activePromptId: "builtin_engineering",
   activeScorePromptId: "builtin_scoring",
   activeDeepReadPromptId: "builtin_deepread",
+  activeConfScorePromptId: "builtin_conf_scoring",
 };
 
 export class PaperDailySettingTab extends PluginSettingTab {
@@ -381,6 +423,86 @@ export class PaperDailySettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("RSS 订阅源 / RSS Sources")
       .setDesc("🚧 Coming Soon — 自定义 RSS/Atom 订阅源将在后续版本支持 | Custom RSS/Atom feed ingestion is planned for a future release.");
+
+    // ── Conference Paper Source ───────────────────────────────────
+    containerEl.createEl("h2", { text: "会议论文源 / Conference Papers" });
+
+    new Setting(containerEl)
+      .setName("启用会议论文 / Enable Conference Papers")
+      .setDesc("从 papercopilot 数据库抓取顶会论文（NeurIPS、ICML、ICLR 等），按兴趣关键词过滤后加入每日排名 | Fetch top-venue accepted papers from papercopilot, filtered by interest keywords and merged into the daily ranking.")
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.conferenceSource?.enabled ?? false)
+        .onChange(async (value) => {
+          this.plugin.settings.conferenceSource = { ...this.plugin.settings.conferenceSource, enabled: value };
+          await this.plugin.saveSettings();
+          this.display();
+        }));
+
+    if (this.plugin.settings.conferenceSource?.enabled) {
+      new Setting(containerEl)
+        .setName("每会议最大论文数 / Max Papers per Conference")
+        .setDesc("每个会议按关键词过滤并按引用数排序后，最多取前 N 篇加入候选池 | Max papers to include per conference after keyword filtering and citation ranking.")
+        .addSlider(slider => slider
+          .setLimits(5, 100, 5)
+          .setValue(this.plugin.settings.conferenceSource?.maxPerConference ?? 20)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.conferenceSource = { ...this.plugin.settings.conferenceSource, maxPerConference: value };
+            await this.plugin.saveSettings();
+          }));
+
+      new Setting(containerEl)
+        .setName("每日会议论文上限 / Max Conference Papers per Day")
+        .setDesc("每日报告中会议论文推荐区最多显示 N 篇（跨所有会议合计，按评分取 top N）| Cap total conference papers shown per day across all venues.")
+        .addSlider(slider => slider
+          .setLimits(1, 20, 1)
+          .setValue(this.plugin.settings.conferenceSource?.maxTotalPerDay ?? 5)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.conferenceSource = { ...this.plugin.settings.conferenceSource, maxTotalPerDay: value };
+            await this.plugin.saveSettings();
+          }));
+
+      new Setting(containerEl)
+        .setName("缓存刷新周期（天）/ Cache Refresh (days)")
+        .setDesc("会议数据 JSON 本地缓存的有效天数，超期后自动重新拉取 | Days before re-fetching the conference JSON from remote.")
+        .addSlider(slider => slider
+          .setLimits(1, 30, 1)
+          .setValue(this.plugin.settings.conferenceSource?.cacheRefreshDays ?? 7)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.conferenceSource = { ...this.plugin.settings.conferenceSource, cacheRefreshDays: value };
+            await this.plugin.saveSettings();
+          }));
+
+      containerEl.createEl("h3", { text: "启用的会议 / Enabled Conferences" });
+      containerEl.createEl("p", {
+        text: "设置最早年份，该年及之后所有可用年份的数据都会被拉取（遇到不存在的年份自动跳过）。可用年份见 github.com/Papercopilot/paperlists",
+        cls: "setting-item-description"
+      });
+      const confs = this.plugin.settings.conferenceSource?.conferences ?? [];
+      confs.forEach((conf, i) => {
+        new Setting(containerEl)
+          .setName(conf.name)
+          .setDesc(`从输入年份起至今所有可用年份 | key: ${conf.key}`)
+          .addText(text => text
+            .setPlaceholder("2024")
+            .setValue(String(conf.fromYear))
+            .onChange(async (value) => {
+              const year = parseInt(value.trim(), 10);
+              if (!isNaN(year) && year >= 2000) {
+                confs[i].fromYear = year;
+                await this.plugin.saveSettings();
+              }
+            }))
+          .addToggle(toggle => toggle
+            .setValue(conf.enabled)
+            .onChange(async (value) => {
+              confs[i].enabled = value;
+              await this.plugin.saveSettings();
+            }));
+      });
+    }
 
     // ── Interest Keywords ─────────────────────────────────────────
     containerEl.createEl("h2", { text: "兴趣关键词 / Interest Keywords" });
@@ -495,15 +617,18 @@ export class PaperDailySettingTab extends PluginSettingTab {
       if (!this.plugin.settings.activePromptId) this.plugin.settings.activePromptId = "builtin_engineering";
       if (!this.plugin.settings.activeScorePromptId) this.plugin.settings.activeScorePromptId = "builtin_scoring";
       if (!this.plugin.settings.activeDeepReadPromptId) this.plugin.settings.activeDeepReadPromptId = "builtin_deepread";
+      if (!this.plugin.settings.activeConfScorePromptId) this.plugin.settings.activeConfScorePromptId = "builtin_conf_scoring";
 
       const getActiveIdForType = (type: string) => {
         if (type === "scoring") return this.plugin.settings.activeScorePromptId;
         if (type === "deepread") return this.plugin.settings.activeDeepReadPromptId;
+        if (type === "conf_scoring") return this.plugin.settings.activeConfScorePromptId;
         return this.plugin.settings.activePromptId;
       };
       const setActiveIdForType = async (type: string, id: string) => {
         if (type === "scoring") this.plugin.settings.activeScorePromptId = id;
         else if (type === "deepread") this.plugin.settings.activeDeepReadPromptId = id;
+        else if (type === "conf_scoring") this.plugin.settings.activeConfScorePromptId = id;
         else this.plugin.settings.activePromptId = id;
         await this.plugin.saveSettings();
       };
@@ -562,7 +687,7 @@ export class PaperDailySettingTab extends PluginSettingTab {
         // Add new template: type selector + button
         const typeSelect = tabBar.createEl("select");
         typeSelect.style.cssText = "padding:4px 8px;border-radius:5px;font-size:0.85em;border:1px solid var(--background-modifier-border);background:var(--background-secondary);color:var(--text-normal);cursor:pointer;";
-        ([["daily", "日报"], ["scoring", "评分"], ["deepread", "精读"]] as [string, string][]).forEach(([val, label]) => {
+        ([["daily", "日报"], ["scoring", "评分"], ["deepread", "精读"], ["conf_scoring", "会议评分"]] as [string, string][]).forEach(([val, label]) => {
           const o = typeSelect.createEl("option", { text: label });
           o.value = val;
         });
@@ -570,9 +695,10 @@ export class PaperDailySettingTab extends PluginSettingTab {
         const addBtn = tabBar.createEl("button", { text: "＋ 新建" });
         addBtn.style.cssText = "padding:5px 12px;border-radius:5px;cursor:pointer;font-size:0.85em;border:2px dashed var(--background-modifier-border);background:transparent;color:var(--text-muted);";
         addBtn.onclick = async () => {
-          const newType = typeSelect.value as "daily" | "scoring" | "deepread";
+          const newType = typeSelect.value as "daily" | "scoring" | "deepread" | "conf_scoring";
           const defaultPrompt = newType === "scoring" ? DEFAULT_SCORING_PROMPT
             : newType === "deepread" ? DEFAULT_DEEP_READ_PROMPT
+            : newType === "conf_scoring" ? DEFAULT_CONF_SCORING_PROMPT
             : DEFAULT_DAILY_PROMPT;
           const newTpl: PromptTemplate = {
             id: `custom_${Date.now()}`,

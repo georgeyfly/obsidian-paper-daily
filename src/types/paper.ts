@@ -1,4 +1,4 @@
-export type PaperSource = "arxiv" | "rss" | "custom" | "hf";
+export type PaperSource = "arxiv" | "rss" | "custom" | "hf" | "conference";
 
 export interface Paper {
   id: string;               // e.g. "arxiv:2501.12345v2"
@@ -14,6 +14,12 @@ export interface Paper {
   // HuggingFace enrichment
   hfUpvotes?: number;
   hfStreak?: number;   // consecutive days on HF daily (tracked across runs)
+
+  // Conference source metadata
+  conferenceVenue?: string;   // e.g. "NeurIPS"
+  conferenceYear?: number;    // e.g. 2024
+  paperStatus?: string;       // "Oral" | "Spotlight" | "Poster"
+  citations?: number;         // Google Scholar citation count
 
   // computed fields
   interestHits?: string[];

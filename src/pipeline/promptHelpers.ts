@@ -2,7 +2,7 @@ import type { PaperDailySettings } from "../types/config";
 import { OpenAICompatibleProvider } from "../llm/openaiCompatible";
 import { AnthropicProvider } from "../llm/anthropicProvider";
 import type { LLMProvider } from "../llm/provider";
-import { DEFAULT_SCORING_PROMPT } from "../settings";
+import { DEFAULT_SCORING_PROMPT, DEFAULT_CONF_SCORING_PROMPT } from "../settings";
 
 export function buildLLMProvider(settings: PaperDailySettings): LLMProvider {
   if (settings.llm.provider === "anthropic") {
@@ -33,4 +33,12 @@ export function getActiveScoringPrompt(settings: PaperDailySettings): string {
     if (tpl) return tpl.prompt;
   }
   return settings.scoringPromptTemplate ?? DEFAULT_SCORING_PROMPT;
+}
+
+export function getActiveConfScoringPrompt(settings: PaperDailySettings): string {
+  if (settings.promptLibrary && settings.activeConfScorePromptId) {
+    const tpl = settings.promptLibrary.find(t => t.id === settings.activeConfScorePromptId);
+    if (tpl) return tpl.prompt;
+  }
+  return DEFAULT_CONF_SCORING_PROMPT;
 }

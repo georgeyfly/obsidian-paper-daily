@@ -2,7 +2,7 @@ export interface PromptTemplate {
   id: string;
   name: string;
   prompt: string;
-  type?: "daily" | "scoring" | "deepread";
+  type?: "daily" | "scoring" | "deepread" | "conf_scoring";
   builtin?: boolean;
 }
 
@@ -64,11 +64,27 @@ export interface PaperDailySettings {
     feeds: string[];   // one URL per entry
   };
 
+  // Top-venue conference paper source (papercopilot)
+  conferenceSource: {
+    enabled: boolean;
+    conferences: Array<{
+      name: string;      // display name, e.g. "NeurIPS"
+      key: string;       // papercopilot path key, e.g. "nips"
+      fromYear: number;  // include this year and all subsequent years available
+      enabled: boolean;
+    }>;
+    maxPerConference: number;   // top N papers per conference after filtering
+    maxTotalPerDay: number;     // cap total conference papers shown per day (across all venues)
+    cacheRefreshDays: number;   // re-fetch remote JSON after this many days
+    includeStatuses: string[];  // filter by acceptance status: "Oral", "Spotlight", "Poster"
+  };
+
   // Prompt template library
   promptLibrary?: PromptTemplate[];
   activePromptId?: string;       // daily
   activeScorePromptId?: string;  // scoring (Step 3b)
   activeDeepReadPromptId?: string; // deepread (Step 3f)
+  activeConfScorePromptId?: string; // conference paper scoring
 
   // Deep read: fetch full paper text from arxiv.org/html and inject into LLM prompt
   deepRead?: {
