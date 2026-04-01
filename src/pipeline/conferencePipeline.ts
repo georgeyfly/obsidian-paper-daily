@@ -7,6 +7,7 @@ import { computeInterestHits } from "../scoring/interest";
 import { buildLLMProvider, fillTemplate, getActiveConfScoringPrompt } from "./promptHelpers";
 import { localDateStr } from "./dailyPipeline";
 import { VaultWriter } from "../storage/vaultWriter";
+import { DedupStore } from "../storage/dedupStore";
 
 export class PipelineAbortError extends Error {}
 
@@ -63,6 +64,7 @@ function formatConferenceSection(papers: Paper[]): string {
 export async function runConferencePipeline(
   app: App,
   settings: PaperDailySettings,
+  dedupStore: DedupStore,
   options: {
     date?: string;
     onProgress?: (msg: string) => void;
@@ -70,8 +72,8 @@ export async function runConferencePipeline(
   } = {}
 ): Promise<void> {
   const log = (msg: string) => options.onProgress?.(msg);
-  const date = options.date ?? localDateStr(new Date());
-  const reportPath = normalizePath(`${settings.rootFolder}/inbox/${date}.md`);
+  const reportDate = options.date ?? localDateStr(new Date());
+  const reportPath = normalizePath(`${settings.rootFolder}/inbox/${reportDate}.md`);
 
   checkAbort(options.signal);
 
@@ -109,19 +111,18 @@ export async function runConferencePipeline(
     p.interestHits = computeInterestHits(p, interestKeywords);
   }
 
-  // Cap before scoring — sort by status tier + interest hits, take top N
-  const maxTotalPerDay = settings.conferenceSource?.maxTotalPerDay ?? 5;
-  const preRanked = allConfPapers
-    .sort((a, b) => {
-      const tierA = ({ oral: 0, spotlight: 1, poster: 2 } as Record<string, number>)[(a.paperStatus ?? "").toLowerCase()] ?? 2;
-      const tierB = ({ oral: 0, spotlight: 1, poster: 2 } as Record<string, number>)[(b.paperStatus ?? "").toLowerCase()] ?? 2;
-      if (tierA !== tierB) return tierA - tierB;
-      return (b.interestHits?.length ?? 0) - (a.interestHits?.length ?? 0);
-    })
-    .slice(0, maxTotalPerDay);
+  // Filter already-seen papers
+  const beforeDedup = allConfPapers.length;
+  const fresh = allConfPapers.filter(p => !dedupStore.hasId(p.id));
+  log(`CONF DEDUP: ${beforeDedup} → ${fresh.length} papers (${beforeDedup - fresh.length} already seen)`);
+
+  if (fresh.length === 0) {
+    log("CONF: all papers already seen — nothing new to recommend");
+    return;
+  }
 
   // Step 2: LLM scoring
-  let scored = preRanked;
+  let scored: Paper[] = fresh;
   if (settings.llm.apiKey) {
     const BATCH_SIZE = 10;
     const scoringTemplate = getActiveConfScoringPrompt(settings);
@@ -129,12 +130,12 @@ export async function runConferencePipeline(
     const llm = buildLLMProvider(settings);
     const normalizeId = (id: string) => id.replace(/^arxiv:/i, "").replace(/v\d+$/i, "").toLowerCase().trim();
 
-    for (let i = 0; i < allConfPapers.length; i += BATCH_SIZE) {
+    for (let i = 0; i < fresh.length; i += BATCH_SIZE) {
       checkAbort(options.signal);
-      const batch = allConfPapers.slice(i, i + BATCH_SIZE);
+      const batch = fresh.slice(i, i + BATCH_SIZE);
       const paperFrom = i + 1;
       const paperTo = i + batch.length;
-      log(`CONF SCORE: scoring ${paperFrom}–${paperTo} / ${allConfPapers.length}...`);
+      log(`CONF SCORE: scoring ${paperFrom}–${paperTo} / ${fresh.length}...`);
 
       const papersForScoring = batch.map(p => ({
         id: p.id,
@@ -168,9 +169,23 @@ export async function runConferencePipeline(
       }
     }
 
-    // Sort by LLM score desc
-    scored = allConfPapers.sort((a, b) => (b.llmScore ?? 0) - (a.llmScore ?? 0));
-    log(`CONF SCORE: done — ${scored.filter(p => p.llmScore !== undefined).length}/${scored.length} scored`);
+    // Sort by LLM score desc, then cap to maxTotalPerDay
+    const maxTotalPerDay = settings.conferenceSource?.maxTotalPerDay ?? 5;
+    scored = fresh
+      .sort((a, b) => (b.llmScore ?? 0) - (a.llmScore ?? 0))
+      .slice(0, maxTotalPerDay);
+    log(`CONF SCORE: done — ${fresh.filter(p => p.llmScore !== undefined).length}/${fresh.length} scored, showing top ${scored.length}`);
+  } else {
+    // No API key — sort by status tier + interest hits, still cap
+    const maxTotalPerDay = settings.conferenceSource?.maxTotalPerDay ?? 5;
+    scored = fresh
+      .sort((a, b) => {
+        const tierA = ({ oral: 0, spotlight: 1, poster: 2 } as Record<string, number>)[(a.paperStatus ?? "").toLowerCase()] ?? 2;
+        const tierB = ({ oral: 0, spotlight: 1, poster: 2 } as Record<string, number>)[(b.paperStatus ?? "").toLowerCase()] ?? 2;
+        if (tierA !== tierB) return tierA - tierB;
+        return (b.interestHits?.length ?? 0) - (a.interestHits?.length ?? 0);
+      })
+      .slice(0, maxTotalPerDay);
   }
 
   // Step 3: Append section to report
@@ -206,4 +221,8 @@ export async function runConferencePipeline(
 
   await app.vault.modify(file, content);
   log(`CONF: appended ${scored.length} papers to ${reportPath}`);
+
+  // Mark shown papers as seen so they won't be recommended again
+  await dedupStore.markSeenBatch(scored.map(p => p.id), reportDate);
+  log(`CONF DEDUP: marked ${scored.length} papers as seen`);
 }

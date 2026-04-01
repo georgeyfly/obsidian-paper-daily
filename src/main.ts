@@ -6,7 +6,7 @@ import { StateStore } from "./storage/stateStore";
 import { DedupStore } from "./storage/dedupStore";
 import { SnapshotStore } from "./storage/snapshotStore";
 import { HFTrackStore } from "./storage/hfTrackStore";
-import { runDailyPipeline, PipelineAbortError, localYesterday, localDateStr } from "./pipeline/dailyPipeline";
+import { runDailyPipeline, PipelineAbortError, localYesterday } from "./pipeline/dailyPipeline";
 import { runBackfillPipeline } from "./pipeline/backfillPipeline";
 import { runConferencePipeline } from "./pipeline/conferencePipeline";
 import { Scheduler } from "./scheduler/scheduler";
@@ -310,12 +310,12 @@ export default class PaperDailyPlugin extends Plugin {
   }
 
   async runConferenceWithUI(): Promise<void> {
-    const today = localDateStr(new Date());
+    const today = localYesterday();
     const fp = new FloatingProgress(() => {
       fp.setMessage("⏹ 正在停止...");
     }, "📚 会议论文");
     try {
-      await runConferencePipeline(this.app, this.settings, {
+      await runConferencePipeline(this.app, this.settings, this.dedupStore, {
         date: today,
         onProgress: (msg) => fp.setMessage(msg)
       });
