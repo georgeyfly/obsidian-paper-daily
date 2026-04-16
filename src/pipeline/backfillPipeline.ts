@@ -3,6 +3,7 @@ import type { PaperDailySettings } from "../types/config";
 import { StateStore } from "../storage/stateStore";
 import { DedupStore } from "../storage/dedupStore";
 import { SnapshotStore } from "../storage/snapshotStore";
+import { ConfDbStore } from "../storage/confDbStore";
 import { runDailyPipeline, PipelineAbortError } from "./dailyPipeline";
 
 function parseDateYMD(str: string): Date {
@@ -33,6 +34,7 @@ export async function runBackfillPipeline(
   stateStore: StateStore,
   dedupStore: DedupStore,
   snapshotStore: SnapshotStore,
+  confDbStore: ConfDbStore,
   options: BackfillOptions
 ): Promise<{ processed: string[]; errors: Record<string, string> }> {
   const start = parseDateYMD(options.startDate);
@@ -71,7 +73,7 @@ export async function runBackfillPipeline(
       const dayStart = new Date(`${date}T00:00:00Z`);
       const dayEnd = new Date(`${date}T23:59:59Z`);
 
-      await runDailyPipeline(app, settings, stateStore, dedupStore, snapshotStore, {
+      await runDailyPipeline(app, settings, stateStore, dedupStore, snapshotStore, confDbStore, {
         targetDate: date,
         windowStart: dayStart,
         windowEnd: dayEnd,

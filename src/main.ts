@@ -6,6 +6,7 @@ import { StateStore } from "./storage/stateStore";
 import { DedupStore } from "./storage/dedupStore";
 import { SnapshotStore } from "./storage/snapshotStore";
 import { HFTrackStore } from "./storage/hfTrackStore";
+import { ConfDbStore } from "./storage/confDbStore";
 import { runDailyPipeline, PipelineAbortError, localYesterday } from "./pipeline/dailyPipeline";
 import { runBackfillPipeline } from "./pipeline/backfillPipeline";
 import { runConferencePipeline } from "./pipeline/conferencePipeline";
@@ -21,6 +22,7 @@ export default class PaperDailyPlugin extends Plugin {
   private dedupStore!: DedupStore;
   private snapshotStore!: SnapshotStore;
   private hfTrackStore!: HFTrackStore;
+  private confDbStore!: ConfDbStore;
   private scheduler!: Scheduler;
   private activeAbortController: AbortController | null = null;
   private activeBackfillController: AbortController | null = null;
@@ -120,10 +122,12 @@ export default class PaperDailyPlugin extends Plugin {
     this.dedupStore = new DedupStore(writer, this.settings.rootFolder);
     this.snapshotStore = new SnapshotStore(writer, this.settings.rootFolder);
     this.hfTrackStore = new HFTrackStore(writer, this.settings.rootFolder);
+    this.confDbStore = new ConfDbStore(writer, this.settings.rootFolder);
 
     await this.stateStore.load();
     await this.dedupStore.load();
     await this.hfTrackStore.load();
+    await this.confDbStore.load();
 
     const root = this.settings.rootFolder;
     for (const sub of ["inbox", "papers", "cache"]) {
@@ -183,7 +187,7 @@ export default class PaperDailyPlugin extends Plugin {
 
     this.addCommand({
       id: "fetch-conference-papers",
-      name: "Fetch & append conference papers to today's report",
+      name: "Refresh conference paper database (rate new, rebuild topconf.md)",
       callback: () => { void this.runConferenceWithUI(); }
     });
 
@@ -205,6 +209,7 @@ export default class PaperDailyPlugin extends Plugin {
       this.stateStore,
       this.dedupStore,
       this.snapshotStore,
+      this.confDbStore,
       { hfTrackStore: this.hfTrackStore, onProgress, signal, onTokenUpdate }
     );
   }
@@ -262,6 +267,7 @@ export default class PaperDailyPlugin extends Plugin {
       this.stateStore,
       this.dedupStore,
       this.snapshotStore,
+      this.confDbStore,
       {
         startDate,
         endDate,
@@ -315,7 +321,7 @@ export default class PaperDailyPlugin extends Plugin {
       fp.setMessage("⏹ 正在停止...");
     }, "📚 会议论文");
     try {
-      await runConferencePipeline(this.app, this.settings, this.dedupStore, {
+      await runConferencePipeline(this.app, this.settings, this.confDbStore, {
         date: today,
         onProgress: (msg) => fp.setMessage(msg)
       });

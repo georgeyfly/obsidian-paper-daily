@@ -1,19 +1,22 @@
 import type { App } from "obsidian";
 import type { PaperDailySettings } from "../types/config";
 import type { Paper } from "../types/paper";
+import { normalizePath } from "obsidian";
 import { VaultWriter } from "../storage/vaultWriter";
 import { StateStore } from "../storage/stateStore";
 import { DedupStore } from "../storage/dedupStore";
 import { SnapshotStore } from "../storage/snapshotStore";
+import { ConfDbStore } from "../storage/confDbStore";
 import { ArxivSource } from "../sources/arxivSource";
 import { HFSource } from "../sources/hfSource";
-import { ConferencePaperSource } from "../sources/conferencePaperSource";
 import { rankPapers } from "../scoring/rank";
 import { computeInterestHits } from "../scoring/interest";
 import type { LLMProvider } from "../llm/provider";
 import type { HFTrackStore } from "../storage/hfTrackStore";
 import { DEFAULT_DEEP_READ_PROMPT } from "../settings";
-import { buildLLMProvider, fillTemplate, getActivePrompt, getActiveScoringPrompt, getActiveConfScoringPrompt } from "./promptHelpers";
+import { buildLLMProvider, fillTemplate, getActivePrompt, getActiveScoringPrompt } from "./promptHelpers";
+import { runConferencePipeline } from "./conferencePipeline";
+import { renderTopConfMarkdown } from "./topConfView";
 
 export function localDateStr(d: Date): string {
   return d.toLocaleDateString("sv");
@@ -225,6 +228,7 @@ export async function runDailyPipeline(
   stateStore: StateStore,
   dedupStore: DedupStore,
   snapshotStore: SnapshotStore,
+  confDbStore: ConfDbStore,
   options: DailyPipelineOptions = {}
 ): Promise<void> {
   const writer = new VaultWriter(app);
@@ -267,7 +271,6 @@ export async function runDailyPipeline(
 
   let papers: Paper[] = [];
   let hfDailyPapers: Paper[] = [];
-  let confPapers: Paper[] = [];
   let fetchError: string | undefined;
   let llmDigest = "";
   let llmError: string | undefined;
@@ -377,65 +380,27 @@ export async function runDailyPipeline(
     log(`Step 1b HF FETCH: skipped (disabled)`);
   }
 
-  // ── Step 1c: Conference Papers (papercopilot) ──────────────────
+  // ── Step 1c: Conference metadata enrichment from persistent DB ──
+  // Conference papers are now managed via a persistent ConfDbStore (refreshed below, Step 3d).
+  // Here we only decorate already-fetched arXiv papers with venue/status info if they appear
+  // in the DB. Conference-only papers are NOT merged into the scoring pool; they are surfaced
+  // in a dedicated section selected from the DB.
   checkAbort();
-  if (settings.conferenceSource?.enabled) {
-    progress(`[1/5] 🎓 拉取会议论文...`);
-    try {
-      const confSource = new ConferencePaperSource(app);
-      const enabledConfs = (settings.conferenceSource.conferences ?? []).filter(c => c.enabled);
-      const currentYear = new Date().getFullYear();
-
-      for (const conf of enabledConfs) {
-        for (let year = conf.fromYear; year <= currentYear + 1; year++) {
-          try {
-            const raw = await confSource.fetchConference(settings, conf, year);
-            const filtered = confSource.filterAndRank(raw, settings);
-            confPapers.push(...filtered);
-            log(`Step 1c CONF: ${conf.name} ${year} → ${raw.length} total, ${filtered.length} after filter`);
-          } catch (err) {
-            // 404 or missing year — silently skip
-            log(`Step 1c CONF: ${conf.name} ${year} not available, skipping`);
-          }
-        }
+  if (settings.conferenceSource?.enabled && papers.length > 0 && confDbStore.size() > 0) {
+    let enrichedCount = 0;
+    for (const p of papers) {
+      if (p.conferenceVenue) continue;
+      const rec = confDbStore.get(p.id);
+      if (rec) {
+        p.conferenceVenue = rec.conferenceVenue;
+        p.conferenceYear = rec.conferenceYear;
+        p.paperStatus = rec.paperStatus;
+        p.citations = rec.citations;
+        enrichedCount++;
       }
-
-      if (confPapers.length > 0) {
-        activeSources.push("conference");
-
-        // Build base-ID index of already-fetched papers to avoid duplicates
-        const existingBaseIds = new Set(
-          papers.map(p => p.id.replace(/^arxiv:/i, "").replace(/v\d+$/i, ""))
-        );
-
-        let enrichedCount = 0;
-        let addedCount = 0;
-        for (const cp of confPapers) {
-          const cpBase = cp.id.replace(/^arxiv:/i, "").replace(/v\d+$/i, "");
-          const matchingPaper = papers.find(p =>
-            p.id.replace(/^arxiv:/i, "").replace(/v\d+$/i, "") === cpBase
-          );
-          if (matchingPaper) {
-            // Enrich existing paper with conference metadata
-            if (!matchingPaper.conferenceVenue) {
-              matchingPaper.conferenceVenue = cp.conferenceVenue;
-              matchingPaper.conferenceYear = cp.conferenceYear;
-              matchingPaper.paperStatus = cp.paperStatus;
-              matchingPaper.citations = cp.citations;
-              enrichedCount++;
-            }
-          } else if (!existingBaseIds.has(cpBase)) {
-            papers.push(cp);
-            existingBaseIds.add(cpBase);
-            addedCount++;
-          }
-        }
-        log(`Step 1c CONF MERGE: enriched=${enrichedCount} arXiv papers, added=${addedCount} conf-only papers`);
-      }
-    } catch (err) {
-      log(`[ERROR][CONF] error=${String(err)} (non-fatal, continuing)`);
     }
-  } else {
+    log(`Step 1c CONF ENRICH (from DB): ${enrichedCount}/${papers.length} arXiv papers decorated with conf metadata`);
+  } else if (!settings.conferenceSource?.enabled) {
     log(`Step 1c CONF: skipped (disabled)`);
   }
 
@@ -551,70 +516,68 @@ export async function runDailyPipeline(
     log(`Step 3b LLM SCORE: skipped (${rankedPapers.length === 0 ? "0 papers" : "no API key"})`);
   }
 
-  // ── Step 3c: Conference paper scoring (conf-specific prompt) ─────
-  const confScoredPapers: Paper[] = rankedPapers.filter(p => p.source === "conference");
-  if (confScoredPapers.length > 0 && settings.llm.apiKey) {
+  // ── Step 3d: Conference picks of the day (from persistent DB) ────
+  // Refresh DB first (rate any new papers once), then pick top-score unshared
+  // records to surface in today's report. Papers picked are marked shared.
+  const confScoredPapers: Paper[] = [];
+  if (settings.conferenceSource?.enabled) {
     checkAbort();
-    const BATCH_SIZE = 10;
-    const confScoringTemplate = getActiveConfScoringPrompt(settings);
-    const kwStr = interestKeywords.map(k => `${k.keyword}(weight:${k.weight})`).join(", ");
-    const llm = buildLLMProvider(settings);
-    const normalizeId = (id: string) => id.replace(/^arxiv:/i, "").replace(/v\d+$/i, "").toLowerCase().trim();
-    let confScored = 0;
-
-    for (let i = 0; i < confScoredPapers.length; i += BATCH_SIZE) {
-      checkAbort();
-      const batch = confScoredPapers.slice(i, i + BATCH_SIZE);
-      progress(`[3c] 🏛 会议论文评分 (${i + 1}–${i + batch.length} / ${confScoredPapers.length})...`);
-
-      const papersForScoring = batch.map(p => ({
-        id: p.id,
-        title: p.title,
-        abstract: p.abstract.slice(0, 250),
-        interestHits: p.interestHits ?? [],
-        conferenceVenue: p.conferenceVenue,
-        conferenceYear: p.conferenceYear,
-        paperStatus: p.paperStatus
-      }));
-      const maxTokens = Math.min(batch.length * 150 + 256, 8192);
-      const prompt = fillTemplate(confScoringTemplate, {
-        interest_keywords: kwStr,
-        papers_json: JSON.stringify(papersForScoring)
+    progress(`[3d] 🏛 刷新会议论文数据库...`);
+    try {
+      await runConferencePipeline(app, settings, confDbStore, {
+        date,
+        onProgress: (m) => log(m),
+        signal: options.signal,
       });
-
-      try {
-        const result = await llm.generate({ prompt, temperature: 0.1, maxTokens, signal: options.signal });
-        if (result.usage) trackUsage("Step 3c conf scoring", result.usage.inputTokens, result.usage.outputTokens);
-        const jsonMatch = result.text.match(/\[[\s\S]*\]/);
-        if (jsonMatch) {
-          const scores: Array<{ id: string; score: number; reason: string; summary?: string }> = JSON.parse(jsonMatch[0]);
-          const scoreMap = new Map(scores.map(s => [normalizeId(s.id), s]));
-          for (const paper of batch) {
-            const s = scoreMap.get(normalizeId(paper.id));
-            if (s) {
-              paper.llmScore = s.score;
-              paper.llmScoreReason = s.reason;
-              if (s.summary) paper.llmSummary = s.summary;
-              confScored++;
-            }
-          }
-        }
-      } catch (err) {
-        log(`[ERROR][CONF SCORE] batch error: ${String(err)} (non-fatal)`);
-      }
+    } catch (err) {
+      if (options.signal?.aborted) throw new PipelineAbortError();
+      log(`[ERROR][CONF REFRESH] error=${String(err)} (non-fatal, continuing)`);
     }
 
-    confScoredPapers.sort((a, b) => (b.llmScore ?? 0) - (a.llmScore ?? 0));
-    log(`Step 3c CONF SCORE: ${confScored}/${confScoredPapers.length} papers scored`);
-  } else if (confScoredPapers.length > 0) {
-    log(`Step 3c CONF SCORE: skipped (no API key)`);
-  }
+    const maxTotalPerDay = settings.conferenceSource.maxTotalPerDay ?? 5;
+    const candidates = confDbStore.getUnshared().filter(r => !dedupStore.hasId(r.id));
+    candidates.sort((a, b) => (b.llmScore ?? -1) - (a.llmScore ?? -1));
+    const picks = candidates.slice(0, maxTotalPerDay);
 
-  // Apply daily cap across all conference papers
-  const maxTotalPerDay = settings.conferenceSource?.maxTotalPerDay ?? 5;
-  if (confScoredPapers.length > maxTotalPerDay) {
-    confScoredPapers.splice(maxTotalPerDay);
-    log(`Step 3c CONF CAP: trimmed to ${maxTotalPerDay} papers`);
+    for (const r of picks) {
+      confDbStore.markShared(r.id, date);
+      await dedupStore.markSeen(r.id, date);
+      // Convert record into a Paper shape for buildConferencePapersSection.
+      confScoredPapers.push({
+        id: r.id,
+        title: r.title,
+        authors: r.authors,
+        abstract: r.abstract,
+        categories: r.categories,
+        published: "",
+        updated: "",
+        links: r.links,
+        source: "conference",
+        conferenceVenue: r.conferenceVenue,
+        conferenceYear: r.conferenceYear,
+        paperStatus: r.paperStatus,
+        citations: r.citations,
+        interestHits: r.interestHits,
+        llmScore: r.llmScore,
+        llmScoreReason: r.llmScoreReason,
+        llmSummary: r.llmSummary,
+      });
+    }
+
+    if (picks.length > 0) {
+      await confDbStore.save();
+      await dedupStore.save();
+      activeSources.push("conference");
+
+      // Rebuild topconf.md so "Shared?" column reflects today's picks.
+      try {
+        const topConfPath = normalizePath(`${settings.rootFolder}/topconf.md`);
+        await writer.writeNote(topConfPath, renderTopConfMarkdown(confDbStore.getAll()));
+      } catch (err) {
+        log(`[ERROR][TOPCONF REBUILD] error=${String(err)} (non-fatal)`);
+      }
+    }
+    log(`Step 3d CONF PICKS: candidates=${candidates.length} picks=${picks.length} (cap=${maxTotalPerDay}, DB size=${confDbStore.size()})`);
   }
 
   // ── Step 3f: Deep Read — per-paper LLM analysis via arxiv HTML URL ───
@@ -742,12 +705,12 @@ export async function runDailyPipeline(
         ? `### HF 社区信号 / HF Community Signal\nFrom the HuggingFace full list, note any papers NOT already covered above. One line each: title + why the community is upvoting it + your take on whether it lives up to the hype.`
         : "";
 
-      const confEnabled = settings.conferenceSource?.enabled && confPapers.length > 0;
+      const confEnabled = settings.conferenceSource?.enabled && confScoredPapers.length > 0;
       const confVenues = confEnabled
-        ? [...new Set(confPapers.map(p => `${p.conferenceVenue} ${p.conferenceYear}`))].join(", ")
+        ? [...new Set(confScoredPapers.map(p => `${p.conferenceVenue} ${p.conferenceYear}`))].join(", ")
         : "";
       const confSection = confEnabled
-        ? `Note: some papers have "source": "conference" — these are accepted papers from top venues (${confVenues}). conferenceVenue, conferenceYear, paperStatus (Oral/Spotlight/Poster), and citations fields indicate venue context. Weight Oral/Spotlight papers more heavily unless keyword relevance is low.`
+        ? `Note: a separate "会议论文推荐" section surfaces today's top-scoring accepted papers from top venues (${confVenues}). Reference them in the daily digest where relevant.`
         : "";
 
       const prompt = fillTemplate(getActivePrompt(settings), {

@@ -58,3 +58,25 @@ export interface DailySnapshot {
   fetchedAt: string;        // ISO
   error?: string;
 }
+
+export interface ConfDbRecord {
+  id: string;                       // normalized id (no "arxiv:" prefix, no version suffix, lowercased)
+  title: string;
+  authors: string[];
+  abstract: string;
+  categories: string[];
+  links: { html?: string; pdf?: string; hf?: string };
+  conferenceVenue?: string;
+  conferenceYear?: number;
+  paperStatus?: string;
+  citations?: number;
+  interestHits: string[];
+  llmScore?: number;
+  llmScoreReason?: string;
+  llmSummary?: string;
+  ratedAt?: string;                 // YYYY-MM-DD — first time LLM-rated
+  sharedDates: string[];            // daily-report dates this paper was surfaced in
+  firstSeenAt: string;              // YYYY-MM-DD — first time ingested into DB
+}
+
+export type ConfDbMap = Record<string, ConfDbRecord>;
