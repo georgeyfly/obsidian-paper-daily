@@ -73,6 +73,38 @@ function buildDeepReadFileName(
   return result.replace(/[/\\:*?"<>|]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || baseId;
 }
 
+function buildHFTopSection(papers: Paper[], topN = 10): string {
+  if (papers.length === 0) return "";
+  const top = papers.slice(0, topN);
+
+  const lines: string[] = [
+    `## 🤗 HuggingFace Top ${top.length}`,
+    "",
+    "> Ranked by community upvotes · source: huggingface.co/papers",
+    "",
+  ];
+
+  top.forEach((p, i) => {
+    const votes = p.hfUpvotes ?? 0;
+    const streakStr = p.hfStreak && p.hfStreak > 1 ? ` · streak ${p.hfStreak}d` : "";
+    const headLine = `${i + 1}. **${p.title}** — 🔥 ${votes} votes${streakStr}`;
+
+    const authors = p.authors.slice(0, 3).join(", ") + (p.authors.length > 3 ? " et al." : "");
+    const linkParts: string[] = [];
+    if (p.links?.hf) linkParts.push(`[🤗 HF](${p.links.hf})`);
+    if (p.links?.html) linkParts.push(`[arXiv](${p.links.html})`);
+    if (p.links?.pdf) linkParts.push(`[PDF](${p.links.pdf})`);
+    const linksStr = linkParts.length ? ` · ${linkParts.join(" · ")}` : "";
+
+    lines.push(headLine);
+    if (p.llmSummary) lines.push(`   ${p.llmSummary}`);
+    if (authors || linksStr) lines.push(`   ${authors}${linksStr}`);
+    lines.push("");
+  });
+
+  return lines.join("\n");
+}
+
 function buildConferencePapersSection(papers: Paper[]): string {
   if (papers.length === 0) return "";
   const venues = [...new Set(papers.map(p =>
@@ -118,6 +150,7 @@ function buildDailyMarkdown(
   activeSources: string[],
   interestHotnessSection: string,
   confScoredPapers: Paper[],
+  hfTopPapers: Paper[],
   error?: string
 ): string {
   const frontmatter = [
@@ -194,10 +227,12 @@ function buildDailyMarkdown(
   ].join("\n");
 
   const confSection = buildConferencePapersSection(confScoredPapers);
+  const hfTopSection = buildHFTopSection(hfTopPapers);
 
   const sections = [frontmatter, "", header];
   if (interestHotnessSection) sections.push("", interestHotnessSection);
   sections.push("", digestSection);
+  if (hfTopSection) sections.push("", hfTopSection);
   if (featuredPapersSection) sections.push("", featuredPapersSection);
   if (confSection) sections.push("", confSection);
   sections.push("", allPapersTableSection);
@@ -800,7 +835,7 @@ export async function runDailyPipeline(
       }
     }
 
-    const markdown = buildDailyMarkdown(date, settings, rankedPapers, llmDigest, activeSources, interestHotnessSection, confScoredPapers, errorMsg);
+    const markdown = buildDailyMarkdown(date, settings, rankedPapers, llmDigest, activeSources, interestHotnessSection, confScoredPapers, hfDailyPapers, errorMsg);
     await writer.writeNote(inboxPath, markdown);
     log(`Step 5 WRITE: markdown written to ${inboxPath}`);
   } catch (err) {
