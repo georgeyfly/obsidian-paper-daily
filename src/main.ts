@@ -148,6 +148,16 @@ export default class PaperDailyPlugin extends Plugin {
       }
     );
     this.scheduler.start();
+
+    // Re-check whenever the Obsidian window regains focus or becomes visible.
+    // setInterval is throttled or paused under macOS App Nap when Obsidian is
+    // in the background, so these events catch up missed ticks immediately.
+    // checkNow() is internally guarded against re-entry and against firing
+    // before the configured dailyTime, so it cannot fire the daily early or twice.
+    this.registerDomEvent(window, "focus", () => { void this.scheduler.checkNow(); });
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (!document.hidden) void this.scheduler.checkNow();
+    });
   }
 
   private registerCommands(): void {
@@ -249,8 +259,17 @@ export default class PaperDailyPlugin extends Plugin {
     return writer.fileExists(`${this.settings.rootFolder}/inbox/${date}.md`);
   }
 
-  /** Called once on startup: silently generate today's file if it is missing. */
+  /** Called once on startup: silently generate today's file if it is missing AND the
+   *  scheduled daily time has already passed. Opening Obsidian before dailyTime never
+   *  fires the pipeline — the user will see the daily appear at the scheduled time
+   *  (via setInterval) or on the next focus event after that time. */
   private async runTodayIfMissing(): Promise<void> {
+    const [h, m] = (this.settings.schedule?.dailyTime ?? "08:30").split(":").map(Number);
+    const now = new Date();
+    const scheduled = new Date(now);
+    scheduled.setHours(h ?? 8, m ?? 0, 0, 0);
+    if (now < scheduled) return;
+
     const today = localYesterday();
     if (await this.todayFileExists(today)) return;
     void this.runDailyWithUI();

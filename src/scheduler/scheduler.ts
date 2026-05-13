@@ -32,7 +32,7 @@ export class Scheduler {
   start(): void {
     if (this.intervalId !== null) return;
     // Tick every 60 seconds
-    this.intervalId = window.setInterval(() => this.tick(), 60 * 1000);
+    this.intervalId = window.setInterval(() => this.checkNow(), 60 * 1000);
   }
 
   stop(): void {
@@ -42,7 +42,9 @@ export class Scheduler {
     }
   }
 
-  private async tick(): Promise<void> {
+  // Public entry point used by the 60s interval AND by external triggers
+  // (window focus, visibilitychange). Re-entry-safe.
+  async checkNow(): Promise<void> {
     if (this.running) return;
     this.running = true;
     try {

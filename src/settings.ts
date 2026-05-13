@@ -277,7 +277,7 @@ export const DEFAULT_SETTINGS: PaperDailySettings = {
   hfSource: {
     enabled: true,
     lookbackDays: 3,
-    dedup: false
+    dedup: true
   },
 
   rssSource: {
@@ -299,9 +299,9 @@ export const DEFAULT_SETTINGS: PaperDailySettings = {
       { name: "CoRL",    key: "corl",  fromYear: 2024, enabled: false },
       { name: "AAAI",    key: "aaai",  fromYear: 2024, enabled: false },
     ],
-    maxPerConference: 20,
-    maxTotalPerDay: 5,
-    cacheRefreshDays: 7,
+    maxPerConference: 200,
+    maxTotalPerDay: 1,
+    cacheRefreshDays: 1,
     includeStatuses: ["Oral", "Spotlight", "Poster"],
   },
 
@@ -406,6 +406,16 @@ export class PaperDailySettingTab extends PluginSettingTab {
             this.plugin.settings.hfSource = { ...this.plugin.settings.hfSource, lookbackDays: value };
             await this.plugin.saveSettings();
           }));
+
+      new Setting(containerEl)
+        .setName("HuggingFace 去重 / HuggingFace Dedup")
+        .setDesc("过滤掉此前已在 HF 每日推荐中出现过的论文，避免 Top 10 反复出现同一篇 | Hide HF papers already surfaced on previous days so Top 10 never repeats.")
+        .addToggle(toggle => toggle
+          .setValue(this.plugin.settings.hfSource?.dedup !== false)
+          .onChange(async (value) => {
+            this.plugin.settings.hfSource = { ...this.plugin.settings.hfSource, dedup: value };
+            await this.plugin.saveSettings();
+          }));
     }
 
     new Setting(containerEl)
@@ -441,10 +451,10 @@ export class PaperDailySettingTab extends PluginSettingTab {
     if (this.plugin.settings.conferenceSource?.enabled) {
       new Setting(containerEl)
         .setName("每会议最大论文数 / Max Papers per Conference")
-        .setDesc("每个会议按关键词过滤并按引用数排序后，最多取前 N 篇加入候选池 | Max papers to include per conference after keyword filtering and citation ranking.")
+        .setDesc("每个会议每次抓取最多取前 N 篇进入候选池。设小会限制 topconf 增长 | Max papers ingested per conference per fetch. Set higher (e.g. 200) so re-fetches surface previously-uncapped papers and topconf can grow.")
         .addSlider(slider => slider
-          .setLimits(5, 100, 5)
-          .setValue(this.plugin.settings.conferenceSource?.maxPerConference ?? 20)
+          .setLimits(5, 500, 5)
+          .setValue(this.plugin.settings.conferenceSource?.maxPerConference ?? 200)
           .setDynamicTooltip()
           .onChange(async (value) => {
             this.plugin.settings.conferenceSource = { ...this.plugin.settings.conferenceSource, maxPerConference: value };
@@ -453,10 +463,10 @@ export class PaperDailySettingTab extends PluginSettingTab {
 
       new Setting(containerEl)
         .setName("每日会议论文上限 / Max Conference Papers per Day")
-        .setDesc("每日报告中会议论文推荐区最多显示 N 篇（跨所有会议合计，按评分取 top N）| Cap total conference papers shown per day across all venues.")
+        .setDesc("每日报告中会议论文推荐区最多显示 N 篇（跨所有会议合计，按 LLM 评分取 top N）| Cap total conference papers surfaced per day across all venues. Default 1 highlights only the single top-rated unshared paper.")
         .addSlider(slider => slider
           .setLimits(1, 20, 1)
-          .setValue(this.plugin.settings.conferenceSource?.maxTotalPerDay ?? 5)
+          .setValue(this.plugin.settings.conferenceSource?.maxTotalPerDay ?? 1)
           .setDynamicTooltip()
           .onChange(async (value) => {
             this.plugin.settings.conferenceSource = { ...this.plugin.settings.conferenceSource, maxTotalPerDay: value };
@@ -464,11 +474,11 @@ export class PaperDailySettingTab extends PluginSettingTab {
           }));
 
       new Setting(containerEl)
-        .setName("缓存刷新周期（天）/ Cache Refresh (days)")
-        .setDesc("会议数据 JSON 本地缓存的有效天数，超期后自动重新拉取 | Days before re-fetching the conference JSON from remote.")
+        .setName("刷新频率（天）/ Refresh Frequency (days)")
+        .setDesc("控制 topconf 抓取与 LLM 评分的频率。每 N 天重新拉取 papercopilot、对新论文 LLM 评分并追加到 topconf.md。等价于本地缓存 TTL | Controls how often topconf re-fetches papercopilot and LLM-rates new papers, then appends to topconf.md. Drives both the local cache TTL and the daily pipeline gate.")
         .addSlider(slider => slider
           .setLimits(1, 30, 1)
-          .setValue(this.plugin.settings.conferenceSource?.cacheRefreshDays ?? 7)
+          .setValue(this.plugin.settings.conferenceSource?.cacheRefreshDays ?? 1)
           .setDynamicTooltip()
           .onChange(async (value) => {
             this.plugin.settings.conferenceSource = { ...this.plugin.settings.conferenceSource, cacheRefreshDays: value };
