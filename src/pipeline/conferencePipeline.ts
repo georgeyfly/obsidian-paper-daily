@@ -68,6 +68,10 @@ export async function runConferencePipeline(
   const conferences = settings.conferenceSource?.conferences ?? [];
   const interestKeywords = settings.interestKeywords ?? [];
 
+  // Per-venue cap counts NEW (not-already-in-DB) papers, not raw rank position.
+  // This lets each refresh discover the NEXT cap papers from the sorted list,
+  // so topconf grows by ~cap per venue-year per refresh until the source is exhausted.
+  const cap = settings.conferenceSource?.maxPerConference ?? 5;
   const fetched: Paper[] = [];
   for (const conf of conferences) {
     if (!conf.enabled) continue;
@@ -76,9 +80,19 @@ export async function runConferencePipeline(
       checkAbort(options.signal);
       try {
         const raw = await confSource.fetchConference(settings, conf, year);
-        const filtered = confSource.filterAndRank(raw, settings);
-        fetched.push(...filtered);
-        log(`CONF: ${conf.name} ${year} → ${filtered.length} papers`);
+        const ranked = confSource.filterAndRank(raw, settings, Number.POSITIVE_INFINITY);
+        let added = 0;
+        let skippedKnown = 0;
+        for (const p of ranked) {
+          if (added >= cap) break;
+          if (confDbStore.has(normalizeConfId(p.id))) {
+            skippedKnown++;
+            continue;
+          }
+          fetched.push(p);
+          added++;
+        }
+        log(`CONF: ${conf.name} ${year} → ${added} new papers (skipped ${skippedKnown} already in DB, ${ranked.length} ranked candidates)`);
       } catch {
         log(`CONF: ${conf.name} ${year} not available, skipping`);
       }

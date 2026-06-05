@@ -288,7 +288,7 @@ var DEFAULT_SETTINGS = {
   hfSource: {
     enabled: true,
     lookbackDays: 3,
-    dedup: false
+    dedup: true
   },
   rssSource: {
     enabled: false,
@@ -308,9 +308,9 @@ var DEFAULT_SETTINGS = {
       { name: "CoRL", key: "corl", fromYear: 2024, enabled: false },
       { name: "AAAI", key: "aaai", fromYear: 2024, enabled: false }
     ],
-    maxPerConference: 20,
-    maxTotalPerDay: 5,
-    cacheRefreshDays: 7,
+    maxPerConference: 200,
+    maxTotalPerDay: 1,
+    cacheRefreshDays: 1,
     includeStatuses: ["Oral", "Spotlight", "Poster"]
   },
   deepRead: {
@@ -377,6 +377,13 @@ var PaperDailySettingTab = class extends import_obsidian.PluginSettingTab {
           await this.plugin.saveSettings();
         });
       });
+      new import_obsidian.Setting(containerEl).setName("HuggingFace \u53BB\u91CD / HuggingFace Dedup").setDesc("\u8FC7\u6EE4\u6389\u6B64\u524D\u5DF2\u5728 HF \u6BCF\u65E5\u63A8\u8350\u4E2D\u51FA\u73B0\u8FC7\u7684\u8BBA\u6587\uFF0C\u907F\u514D Top 10 \u53CD\u590D\u51FA\u73B0\u540C\u4E00\u7BC7 | Hide HF papers already surfaced on previous days so Top 10 never repeats.").addToggle((toggle) => {
+        var _a3;
+        return toggle.setValue(((_a3 = this.plugin.settings.hfSource) == null ? void 0 : _a3.dedup) !== false).onChange(async (value) => {
+          this.plugin.settings.hfSource = { ...this.plugin.settings.hfSource, dedup: value };
+          await this.plugin.saveSettings();
+        });
+      });
     }
     new import_obsidian.Setting(containerEl).setName("\u65F6\u95F4\u7A97\u53E3\uFF08\u5C0F\u65F6\uFF09/ Time Window (hours)").setDesc("\u6293\u53D6\u8FC7\u53BB N \u5C0F\u65F6\u5185\u53D1\u5E03\u6216\u66F4\u65B0\u7684\u8BBA\u6587\uFF0C\u9ED8\u8BA4 72 \u5C0F\u65F6\u8986\u76D6\u5468\u672B | Fetch papers published/updated within the past N hours. Default 72 covers weekends.").addSlider((slider) => {
       var _a3;
@@ -396,23 +403,23 @@ var PaperDailySettingTab = class extends import_obsidian.PluginSettingTab {
       });
     });
     if ((_b = this.plugin.settings.conferenceSource) == null ? void 0 : _b.enabled) {
-      new import_obsidian.Setting(containerEl).setName("\u6BCF\u4F1A\u8BAE\u6700\u5927\u8BBA\u6587\u6570 / Max Papers per Conference").setDesc("\u6BCF\u4E2A\u4F1A\u8BAE\u6309\u5173\u952E\u8BCD\u8FC7\u6EE4\u5E76\u6309\u5F15\u7528\u6570\u6392\u5E8F\u540E\uFF0C\u6700\u591A\u53D6\u524D N \u7BC7\u52A0\u5165\u5019\u9009\u6C60 | Max papers to include per conference after keyword filtering and citation ranking.").addSlider((slider) => {
+      new import_obsidian.Setting(containerEl).setName("\u6BCF\u4F1A\u8BAE\u6700\u5927\u8BBA\u6587\u6570 / Max Papers per Conference").setDesc("\u6BCF\u4E2A\u4F1A\u8BAE\u6BCF\u6B21\u6293\u53D6\u6700\u591A\u53D6\u524D N \u7BC7\u8FDB\u5165\u5019\u9009\u6C60\u3002\u8BBE\u5C0F\u4F1A\u9650\u5236 topconf \u589E\u957F | Max papers ingested per conference per fetch. Set higher (e.g. 200) so re-fetches surface previously-uncapped papers and topconf can grow.").addSlider((slider) => {
         var _a3, _b2;
-        return slider.setLimits(5, 100, 5).setValue((_b2 = (_a3 = this.plugin.settings.conferenceSource) == null ? void 0 : _a3.maxPerConference) != null ? _b2 : 20).setDynamicTooltip().onChange(async (value) => {
+        return slider.setLimits(5, 500, 5).setValue((_b2 = (_a3 = this.plugin.settings.conferenceSource) == null ? void 0 : _a3.maxPerConference) != null ? _b2 : 200).setDynamicTooltip().onChange(async (value) => {
           this.plugin.settings.conferenceSource = { ...this.plugin.settings.conferenceSource, maxPerConference: value };
           await this.plugin.saveSettings();
         });
       });
-      new import_obsidian.Setting(containerEl).setName("\u6BCF\u65E5\u4F1A\u8BAE\u8BBA\u6587\u4E0A\u9650 / Max Conference Papers per Day").setDesc("\u6BCF\u65E5\u62A5\u544A\u4E2D\u4F1A\u8BAE\u8BBA\u6587\u63A8\u8350\u533A\u6700\u591A\u663E\u793A N \u7BC7\uFF08\u8DE8\u6240\u6709\u4F1A\u8BAE\u5408\u8BA1\uFF0C\u6309\u8BC4\u5206\u53D6 top N\uFF09| Cap total conference papers shown per day across all venues.").addSlider((slider) => {
+      new import_obsidian.Setting(containerEl).setName("\u6BCF\u65E5\u4F1A\u8BAE\u8BBA\u6587\u4E0A\u9650 / Max Conference Papers per Day").setDesc("\u6BCF\u65E5\u62A5\u544A\u4E2D\u4F1A\u8BAE\u8BBA\u6587\u63A8\u8350\u533A\u6700\u591A\u663E\u793A N \u7BC7\uFF08\u8DE8\u6240\u6709\u4F1A\u8BAE\u5408\u8BA1\uFF0C\u6309 LLM \u8BC4\u5206\u53D6 top N\uFF09| Cap total conference papers surfaced per day across all venues. Default 1 highlights only the single top-rated unshared paper.").addSlider((slider) => {
         var _a3, _b2;
-        return slider.setLimits(1, 20, 1).setValue((_b2 = (_a3 = this.plugin.settings.conferenceSource) == null ? void 0 : _a3.maxTotalPerDay) != null ? _b2 : 5).setDynamicTooltip().onChange(async (value) => {
+        return slider.setLimits(1, 20, 1).setValue((_b2 = (_a3 = this.plugin.settings.conferenceSource) == null ? void 0 : _a3.maxTotalPerDay) != null ? _b2 : 1).setDynamicTooltip().onChange(async (value) => {
           this.plugin.settings.conferenceSource = { ...this.plugin.settings.conferenceSource, maxTotalPerDay: value };
           await this.plugin.saveSettings();
         });
       });
-      new import_obsidian.Setting(containerEl).setName("\u7F13\u5B58\u5237\u65B0\u5468\u671F\uFF08\u5929\uFF09/ Cache Refresh (days)").setDesc("\u4F1A\u8BAE\u6570\u636E JSON \u672C\u5730\u7F13\u5B58\u7684\u6709\u6548\u5929\u6570\uFF0C\u8D85\u671F\u540E\u81EA\u52A8\u91CD\u65B0\u62C9\u53D6 | Days before re-fetching the conference JSON from remote.").addSlider((slider) => {
+      new import_obsidian.Setting(containerEl).setName("\u5237\u65B0\u9891\u7387\uFF08\u5929\uFF09/ Refresh Frequency (days)").setDesc("\u63A7\u5236 topconf \u6293\u53D6\u4E0E LLM \u8BC4\u5206\u7684\u9891\u7387\u3002\u6BCF N \u5929\u91CD\u65B0\u62C9\u53D6 papercopilot\u3001\u5BF9\u65B0\u8BBA\u6587 LLM \u8BC4\u5206\u5E76\u8FFD\u52A0\u5230 topconf.md\u3002\u7B49\u4EF7\u4E8E\u672C\u5730\u7F13\u5B58 TTL | Controls how often topconf re-fetches papercopilot and LLM-rates new papers, then appends to topconf.md. Drives both the local cache TTL and the daily pipeline gate.").addSlider((slider) => {
         var _a3, _b2;
-        return slider.setLimits(1, 30, 1).setValue((_b2 = (_a3 = this.plugin.settings.conferenceSource) == null ? void 0 : _a3.cacheRefreshDays) != null ? _b2 : 7).setDynamicTooltip().onChange(async (value) => {
+        return slider.setLimits(1, 30, 1).setValue((_b2 = (_a3 = this.plugin.settings.conferenceSource) == null ? void 0 : _a3.cacheRefreshDays) != null ? _b2 : 1).setDynamicTooltip().onChange(async (value) => {
           this.plugin.settings.conferenceSource = { ...this.plugin.settings.conferenceSource, cacheRefreshDays: value };
           await this.plugin.saveSettings();
         });
@@ -1113,6 +1120,10 @@ var StateStore = class {
   }
   async setLastDailyRun(iso) {
     this.state.lastDailyRun = iso;
+    await this.save();
+  }
+  async setLastConfRefresh(iso) {
+    this.state.lastConfRefresh = iso;
     await this.save();
   }
   async setLastError(stage, message) {
@@ -4981,10 +4992,12 @@ var ConferencePaperSource = class {
     return papers;
   }
   // Filter and rank papers by interest keywords + status, return top N.
-  filterAndRank(papers, settings) {
+  // Pass capOverride to control the slice size (use Infinity to skip slicing entirely
+  // and let the caller pick the next-N-new papers against the DB).
+  filterAndRank(papers, settings, capOverride) {
     var _a2, _b, _c, _d, _e;
     const keywords = (_a2 = settings.interestKeywords) != null ? _a2 : [];
-    const maxPerConference = (_c = (_b = settings.conferenceSource) == null ? void 0 : _b.maxPerConference) != null ? _c : 20;
+    const maxPerConference = capOverride != null ? capOverride : (_c = (_b = settings.conferenceSource) == null ? void 0 : _b.maxPerConference) != null ? _c : 20;
     const includeStatuses = ((_e = (_d = settings.conferenceSource) == null ? void 0 : _d.includeStatuses) != null ? _e : ["Oral", "Spotlight", "Poster"]).map((s) => s.toLowerCase());
     let filtered = papers;
     if (includeStatuses.length > 0) {
@@ -5104,7 +5117,7 @@ function paperToRecord(p, firstSeenAt) {
   };
 }
 async function runConferencePipeline(app, settings, confDbStore, options = {}) {
-  var _a2, _b, _c, _d, _e;
+  var _a2, _b, _c, _d, _e, _f, _g;
   const log = (msg) => {
     var _a3;
     return (_a3 = options.onProgress) == null ? void 0 : _a3.call(options, msg);
@@ -5115,18 +5128,30 @@ async function runConferencePipeline(app, settings, confDbStore, options = {}) {
   const currentYear = new Date().getFullYear();
   const conferences = (_c = (_b = settings.conferenceSource) == null ? void 0 : _b.conferences) != null ? _c : [];
   const interestKeywords = (_d = settings.interestKeywords) != null ? _d : [];
+  const cap = (_f = (_e = settings.conferenceSource) == null ? void 0 : _e.maxPerConference) != null ? _f : 5;
   const fetched = [];
   for (const conf of conferences) {
     if (!conf.enabled)
       continue;
-    const fromYear = (_e = conf.fromYear) != null ? _e : 2024;
+    const fromYear = (_g = conf.fromYear) != null ? _g : 2024;
     for (let year = fromYear; year <= currentYear + 1; year++) {
       checkAbort(options.signal);
       try {
         const raw = await confSource.fetchConference(settings, conf, year);
-        const filtered = confSource.filterAndRank(raw, settings);
-        fetched.push(...filtered);
-        log(`CONF: ${conf.name} ${year} \u2192 ${filtered.length} papers`);
+        const ranked = confSource.filterAndRank(raw, settings, Number.POSITIVE_INFINITY);
+        let added = 0;
+        let skippedKnown = 0;
+        for (const p of ranked) {
+          if (added >= cap)
+            break;
+          if (confDbStore.has(normalizeConfId(p.id))) {
+            skippedKnown++;
+            continue;
+          }
+          fetched.push(p);
+          added++;
+        }
+        log(`CONF: ${conf.name} ${year} \u2192 ${added} new papers (skipped ${skippedKnown} already in DB, ${ranked.length} ranked candidates)`);
       } catch (e) {
         log(`CONF: ${conf.name} ${year} not available, skipping`);
       }
@@ -5344,12 +5369,16 @@ function buildDailyMarkdown(date, settings, rankedPapers, aiDigest, activeSource
     "---"
   ].join("\n");
   const header = `# Paper Daily \u2014 ${date}`;
-  const modelAttr = error ? "" : ` | by ${settings.llm.model} \u8001\u5E08 \u{1F916}`;
-  const digestSection = error ? `## \u4ECA\u65E5\u8981\u70B9\uFF08AI \u603B\u7ED3\uFF09
+  const hasDigest = aiDigest.trim().length > 0;
+  const modelAttr = hasDigest ? ` | by ${settings.llm.model} \u8001\u5E08 \u{1F916}` : "";
+  const partialWarning = hasDigest && error ? `> \u26A0\uFE0F **Partial run**: ${error}
 
-> **Error**: ${error}` : `## \u4ECA\u65E5\u8981\u70B9\uFF08AI \u603B\u7ED3\uFF09${modelAttr}
+` : "";
+  const digestSection = hasDigest ? `## \u4ECA\u65E5\u8981\u70B9\uFF08AI \u603B\u7ED3\uFF09${modelAttr}
 
-${aiDigest}`;
+${partialWarning}${aiDigest}` : `## \u4ECA\u65E5\u8981\u70B9\uFF08AI \u603B\u7ED3\uFF09
+
+> **Error**: ${error != null ? error : "No summary generated"}`;
   const deepReadFolder = (_b = (_a2 = settings.deepRead) == null ? void 0 : _a2.outputFolder) != null ? _b : "PaperDaily/deep-read";
   const fnTemplate = ((_d = (_c = settings.deepRead) == null ? void 0 : _c.fileNameTemplate) == null ? void 0 : _d.trim()) || "{{title}}-deep-read-{{model}}";
   const deepReadPapers = rankedPapers.filter((p) => p.deepReadAnalysis);
@@ -5424,7 +5453,7 @@ var PipelineAbortError2 = class extends Error {
   }
 };
 async function runDailyPipeline(app, settings, stateStore, dedupStore, snapshotStore, confDbStore, options = {}) {
-  var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O;
+  var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q;
   const writer = new VaultWriter(app);
   const now = new Date();
   const date = (_a2 = options.targetDate) != null ? _a2 : localYesterday();
@@ -5689,19 +5718,30 @@ async function runDailyPipeline(app, settings, stateStore, dedupStore, snapshotS
   const confScoredPapers = [];
   if ((_t = settings.conferenceSource) == null ? void 0 : _t.enabled) {
     checkAbort2();
-    progress(`[3d] \u{1F3DB} \u5237\u65B0\u4F1A\u8BAE\u8BBA\u6587\u6570\u636E\u5E93...`);
-    try {
-      await runConferencePipeline(app, settings, confDbStore, {
-        date,
-        onProgress: (m) => log(m),
-        signal: options.signal
-      });
-    } catch (err) {
-      if ((_u = options.signal) == null ? void 0 : _u.aborted)
-        throw new PipelineAbortError2();
-      log(`[ERROR][CONF REFRESH] error=${String(err)} (non-fatal, continuing)`);
+    const freqDays = (_u = settings.conferenceSource.cacheRefreshDays) != null ? _u : 1;
+    const lastRefreshIso = (_v = stateStore.get().lastConfRefresh) != null ? _v : "";
+    const lastRefreshMs = lastRefreshIso ? Date.parse(lastRefreshIso) : 0;
+    const ageMs = Date.now() - lastRefreshMs;
+    const dueForRefresh = !lastRefreshIso || ageMs >= freqDays * 86400 * 1e3;
+    if (dueForRefresh) {
+      progress(`[3d] \u{1F3DB} \u5237\u65B0\u4F1A\u8BAE\u8BBA\u6587\u6570\u636E\u5E93...`);
+      try {
+        await runConferencePipeline(app, settings, confDbStore, {
+          date,
+          onProgress: (m) => log(m),
+          signal: options.signal
+        });
+        await stateStore.setLastConfRefresh(new Date().toISOString());
+      } catch (err) {
+        if ((_w = options.signal) == null ? void 0 : _w.aborted)
+          throw new PipelineAbortError2();
+        log(`[ERROR][CONF REFRESH] error=${String(err)} (non-fatal, continuing)`);
+      }
+    } else {
+      const ageHours = Math.floor(ageMs / 36e5);
+      log(`Step 3d CONF REFRESH: skipped \u2014 last refresh ${ageHours}h ago, frequency=${freqDays}d`);
     }
-    const maxTotalPerDay = (_v = settings.conferenceSource.maxTotalPerDay) != null ? _v : 5;
+    const maxTotalPerDay = (_x = settings.conferenceSource.maxTotalPerDay) != null ? _x : 1;
     const candidates = confDbStore.getUnshared().filter((r) => !dedupStore.hasId(r.id));
     candidates.sort((a, b) => {
       var _a3, _b2;
@@ -5745,9 +5785,9 @@ async function runDailyPipeline(app, settings, stateStore, dedupStore, snapshotS
     log(`Step 3d CONF PICKS: candidates=${candidates.length} picks=${picks.length} (cap=${maxTotalPerDay}, DB size=${confDbStore.size()})`);
   }
   let fulltextSection = "";
-  if (((_w = settings.deepRead) == null ? void 0 : _w.enabled) && rankedPapers.length > 0 && settings.llm.apiKey) {
-    const topN = Math.min((_x = settings.deepRead.topN) != null ? _x : 10, rankedPapers.length);
-    const maxTokens = (_y = settings.deepRead.deepReadMaxTokens) != null ? _y : 1024;
+  if (((_y = settings.deepRead) == null ? void 0 : _y.enabled) && rankedPapers.length > 0 && settings.llm.apiKey) {
+    const topN = Math.min((_z = settings.deepRead.topN) != null ? _z : 10, rankedPapers.length);
+    const maxTokens = (_A = settings.deepRead.deepReadMaxTokens) != null ? _A : 1024;
     const drPrompt = getActiveDeepReadPrompt(settings);
     const langStr = settings.language === "zh" ? "Chinese (\u4E2D\u6587)" : "English";
     progress(`[3/5] \u{1F4D6} Deep Read \u2014 \u5171 ${topN} \u7BC7...`);
@@ -5763,10 +5803,10 @@ async function runDailyPipeline(app, settings, stateStore, dedupStore, snapshotS
       const arxivUrl = `https://arxiv.org/abs/${baseId}`;
       const paperPrompt = fillTemplate(drPrompt, {
         title: paper.title,
-        authors: ((_z = paper.authors) != null ? _z : []).slice(0, 5).join(", ") || "Unknown",
+        authors: ((_B = paper.authors) != null ? _B : []).slice(0, 5).join(", ") || "Unknown",
         published: paper.published ? paper.published.slice(0, 10) : date,
         arxiv_url: arxivUrl,
-        interest_hits: ((_A = paper.interestHits) != null ? _A : []).join(", ") || "none",
+        interest_hits: ((_C = paper.interestHits) != null ? _C : []).join(", ") || "none",
         abstract: paper.abstract,
         fulltext: htmlUrl,
         language: langStr
@@ -5781,12 +5821,12 @@ async function runDailyPipeline(app, settings, stateStore, dedupStore, snapshotS
 ${paper.deepReadAnalysis}`);
         log(`Step 3f DEEPREAD [${i + 1}/${topN}]: done (${result.text.length} chars)`);
         try {
-          const outputFolder = `${(_C = (_B = settings.deepRead) == null ? void 0 : _B.outputFolder) != null ? _C : "PaperDaily/deep-read"}/${date}`;
+          const outputFolder = `${(_E = (_D = settings.deepRead) == null ? void 0 : _D.outputFolder) != null ? _E : "PaperDaily/deep-read"}/${date}`;
           const fileTags = [
-            ...(_E = (_D = settings.deepRead) == null ? void 0 : _D.tags) != null ? _E : ["paper", "deep-read"],
-            ...((_F = paper.interestHits) != null ? _F : []).map((h) => h.replace(/\s+/g, "-"))
+            ...(_G = (_F = settings.deepRead) == null ? void 0 : _F.tags) != null ? _G : ["paper", "deep-read"],
+            ...((_H = paper.interestHits) != null ? _H : []).map((h) => h.replace(/\s+/g, "-"))
           ];
-          const fnTemplate = ((_H = (_G = settings.deepRead) == null ? void 0 : _G.fileNameTemplate) == null ? void 0 : _H.trim()) || "{{title}}-deep-read-{{model}}";
+          const fnTemplate = ((_J = (_I = settings.deepRead) == null ? void 0 : _I.fileNameTemplate) == null ? void 0 : _J.trim()) || "{{title}}-deep-read-{{model}}";
           const fileName = buildDeepReadFileName(fnTemplate, paper, baseId, date, settings.llm.model);
           const paperFrontmatter = [
             "---",
@@ -5795,7 +5835,7 @@ ${paper.deepReadAnalysis}`);
             `date: ${date}`,
             `arxivId: ${baseId}`,
             `arxivUrl: ${arxivUrl}`,
-            `authors: [${((_I = paper.authors) != null ? _I : []).slice(0, 5).map((a) => `"${a.replace(/"/g, '\\"')}"`).join(", ")}]`,
+            `authors: [${((_K = paper.authors) != null ? _K : []).slice(0, 5).map((a) => `"${a.replace(/"/g, '\\"')}"`).join(", ")}]`,
             `published: ${paper.published ? paper.published.slice(0, 10) : date}`,
             `tags: [${fileTags.map((t) => `"${t}"`).join(", ")}]`,
             ...paper.llmScore != null ? [`llmScore: ${paper.llmScore}`] : [],
@@ -5827,7 +5867,7 @@ ${paper.deepReadAnalysis}
     }
     log(`Step 3f DEEPREAD: ${analysisResults.length}/${topN} papers analysed`);
   } else {
-    log(`Step 3f DEEPREAD: skipped (enabled=${(_K = (_J = settings.deepRead) == null ? void 0 : _J.enabled) != null ? _K : false})`);
+    log(`Step 3f DEEPREAD: skipped (enabled=${(_M = (_L = settings.deepRead) == null ? void 0 : _L.enabled) != null ? _M : false})`);
   }
   checkAbort2();
   if (rankedPapers.length > 0 && settings.llm.apiKey) {
@@ -5860,14 +5900,14 @@ ${paper.deepReadAnalysis}
           ...p.hfStreak && p.hfStreak > 1 ? { streakDays: p.hfStreak } : {}
         };
       });
-      const hfEnabled = ((_L = settings.hfSource) == null ? void 0 : _L.enabled) !== false && hfDailyPapers.length > 0;
+      const hfEnabled = ((_N = settings.hfSource) == null ? void 0 : _N.enabled) !== false && hfDailyPapers.length > 0;
       const hfDataSection = hfEnabled ? `Note: papers with "source": "hf" are HuggingFace-only picks. Treat them identically to arXiv papers.
 
 ## HuggingFace Daily Papers (full list for reference, sorted by upvotes):
 ${JSON.stringify(hfForLLM, null, 2)}` : "";
       const hfSignalSection = hfEnabled ? `### HF \u793E\u533A\u4FE1\u53F7 / HF Community Signal
 From the HuggingFace full list, note any papers NOT already covered above. One line each: title + why the community is upvoting it + your take on whether it lives up to the hype.` : "";
-      const confEnabled = ((_M = settings.conferenceSource) == null ? void 0 : _M.enabled) && confScoredPapers.length > 0;
+      const confEnabled = ((_O = settings.conferenceSource) == null ? void 0 : _O.enabled) && confScoredPapers.length > 0;
       const confVenues = confEnabled ? [...new Set(confScoredPapers.map((p) => `${p.conferenceVenue} ${p.conferenceYear}`))].join(", ") : "";
       const confSection = confEnabled ? `Note: a separate "\u4F1A\u8BAE\u8BBA\u6587\u63A8\u8350" section surfaces today's top-scoring accepted papers from top venues (${confVenues}). Reference them in the daily digest where relevant.` : "";
       const prompt2 = fillTemplate(getActivePrompt(settings), {
@@ -5910,14 +5950,14 @@ LLM failed: ${llmError}` : ""}` : llmError ? `LLM failed: ${llmError}` : void 0;
         areaMap.set(kw.keyword, { keyword: kw.keyword, weight: kw.weight, count: 0, totalScore: 0, scored: 0 });
       }
       for (const paper of rankedPapers) {
-        for (const hit of (_N = paper.interestHits) != null ? _N : []) {
+        for (const hit of (_P = paper.interestHits) != null ? _P : []) {
           const s = areaMap.get(hit);
           if (s) {
             s.count++;
             if (paper.llmScore != null) {
               s.totalScore += paper.llmScore;
               s.scored++;
-              if (!s.topPaper || paper.llmScore > ((_O = s.topPaper.llmScore) != null ? _O : 0))
+              if (!s.topPaper || paper.llmScore > ((_Q = s.topPaper.llmScore) != null ? _Q : 0))
                 s.topPaper = paper;
             }
           }
@@ -6051,7 +6091,7 @@ var Scheduler = class {
   start() {
     if (this.intervalId !== null)
       return;
-    this.intervalId = window.setInterval(() => this.tick(), 60 * 1e3);
+    this.intervalId = window.setInterval(() => this.checkNow(), 60 * 1e3);
   }
   stop() {
     if (this.intervalId !== null) {
@@ -6059,7 +6099,9 @@ var Scheduler = class {
       this.intervalId = null;
     }
   }
-  async tick() {
+  // Public entry point used by the 60s interval AND by external triggers
+  // (window focus, visibilitychange). Re-entry-safe.
+  async checkNow() {
     if (this.running)
       return;
     this.running = true;
@@ -6450,6 +6492,13 @@ var PaperDailyPlugin = class extends import_obsidian10.Plugin {
       }
     );
     this.scheduler.start();
+    this.registerDomEvent(window, "focus", () => {
+      void this.scheduler.checkNow();
+    });
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (!document.hidden)
+        void this.scheduler.checkNow();
+    });
   }
   registerCommands() {
     this.addCommand({
@@ -6545,8 +6594,18 @@ var PaperDailyPlugin = class extends import_obsidian10.Plugin {
     const writer = new VaultWriter(this.app);
     return writer.fileExists(`${this.settings.rootFolder}/inbox/${date}.md`);
   }
-  /** Called once on startup: silently generate today's file if it is missing. */
+  /** Called once on startup: silently generate today's file if it is missing AND the
+   *  scheduled daily time has already passed. Opening Obsidian before dailyTime never
+   *  fires the pipeline — the user will see the daily appear at the scheduled time
+   *  (via setInterval) or on the next focus event after that time. */
   async runTodayIfMissing() {
+    var _a2, _b;
+    const [h, m] = ((_b = (_a2 = this.settings.schedule) == null ? void 0 : _a2.dailyTime) != null ? _b : "08:30").split(":").map(Number);
+    const now = new Date();
+    const scheduled = new Date(now);
+    scheduled.setHours(h != null ? h : 8, m != null ? m : 0, 0, 0);
+    if (now < scheduled)
+      return;
     const today = localYesterday();
     if (await this.todayFileExists(today))
       return;

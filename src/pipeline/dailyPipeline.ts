@@ -165,10 +165,16 @@ function buildDailyMarkdown(
 
   const header = `# Paper Daily — ${date}`;
 
-  const modelAttr = error ? "" : ` | by ${settings.llm.model} 老师 🤖`;
-  const digestSection = error
-    ? `## 今日要点（AI 总结）\n\n> **Error**: ${error}`
-    : `## 今日要点（AI 总结）${modelAttr}\n\n${aiDigest}`;
+  // Show the digest whenever the LLM produced one, even if a source fetch
+  // failed (e.g. arXiv 429 while HuggingFace papers still yielded a summary).
+  // A failed fetch becomes a non-blocking warning above the digest instead of
+  // replacing it; only show the bare error block when no digest exists at all.
+  const hasDigest = aiDigest.trim().length > 0;
+  const modelAttr = hasDigest ? ` | by ${settings.llm.model} 老师 🤖` : "";
+  const partialWarning = hasDigest && error ? `> ⚠️ **Partial run**: ${error}\n\n` : "";
+  const digestSection = hasDigest
+    ? `## 今日要点（AI 总结）${modelAttr}\n\n${partialWarning}${aiDigest}`
+    : `## 今日要点（AI 总结）\n\n> **Error**: ${error ?? "No summary generated"}`;
 
   // ── All Papers Table ──────────────────────────────────────────
   const deepReadFolder = settings.deepRead?.outputFolder ?? "PaperDaily/deep-read";
@@ -554,22 +560,36 @@ export async function runDailyPipeline(
   // ── Step 3d: Conference picks of the day (from persistent DB) ────
   // Refresh DB first (rate any new papers once), then pick top-score unshared
   // records to surface in today's report. Papers picked are marked shared.
+  // Refresh is gated by user-configured frequency: skip the (expensive) refetch+
+  // LLM-rate step if it ran less than `cacheRefreshDays` ago.
   const confScoredPapers: Paper[] = [];
   if (settings.conferenceSource?.enabled) {
     checkAbort();
-    progress(`[3d] 🏛 刷新会议论文数据库...`);
-    try {
-      await runConferencePipeline(app, settings, confDbStore, {
-        date,
-        onProgress: (m) => log(m),
-        signal: options.signal,
-      });
-    } catch (err) {
-      if (options.signal?.aborted) throw new PipelineAbortError();
-      log(`[ERROR][CONF REFRESH] error=${String(err)} (non-fatal, continuing)`);
+    const freqDays = settings.conferenceSource.cacheRefreshDays ?? 1;
+    const lastRefreshIso = stateStore.get().lastConfRefresh ?? "";
+    const lastRefreshMs = lastRefreshIso ? Date.parse(lastRefreshIso) : 0;
+    const ageMs = Date.now() - lastRefreshMs;
+    const dueForRefresh = !lastRefreshIso || ageMs >= freqDays * 86400 * 1000;
+
+    if (dueForRefresh) {
+      progress(`[3d] 🏛 刷新会议论文数据库...`);
+      try {
+        await runConferencePipeline(app, settings, confDbStore, {
+          date,
+          onProgress: (m) => log(m),
+          signal: options.signal,
+        });
+        await stateStore.setLastConfRefresh(new Date().toISOString());
+      } catch (err) {
+        if (options.signal?.aborted) throw new PipelineAbortError();
+        log(`[ERROR][CONF REFRESH] error=${String(err)} (non-fatal, continuing)`);
+      }
+    } else {
+      const ageHours = Math.floor(ageMs / 3600000);
+      log(`Step 3d CONF REFRESH: skipped — last refresh ${ageHours}h ago, frequency=${freqDays}d`);
     }
 
-    const maxTotalPerDay = settings.conferenceSource.maxTotalPerDay ?? 5;
+    const maxTotalPerDay = settings.conferenceSource.maxTotalPerDay ?? 1;
     const candidates = confDbStore.getUnshared().filter(r => !dedupStore.hasId(r.id));
     candidates.sort((a, b) => (b.llmScore ?? -1) - (a.llmScore ?? -1));
     const picks = candidates.slice(0, maxTotalPerDay);

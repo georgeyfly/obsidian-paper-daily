@@ -43,6 +43,7 @@ export interface FetchParams {
 
 export interface RunState {
   lastDailyRun: string;    // ISO or ""
+  lastConfRefresh?: string; // ISO of last successful conference DB refresh
   lastError: {
     time: string;
     stage: "fetch" | "llm" | "write" | "";

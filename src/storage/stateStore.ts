@@ -37,6 +37,11 @@ export class StateStore {
     await this.save();
   }
 
+  async setLastConfRefresh(iso: string): Promise<void> {
+    this.state.lastConfRefresh = iso;
+    await this.save();
+  }
+
   async setLastError(stage: RunState["lastError"] extends null ? never : NonNullable<RunState["lastError"]>["stage"], message: string): Promise<void> {
     this.state.lastError = { time: new Date().toISOString(), stage, message };
     await this.save();

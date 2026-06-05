@@ -123,9 +123,11 @@ export class ConferencePaperSource implements PaperSource {
   }
 
   // Filter and rank papers by interest keywords + status, return top N.
-  filterAndRank(papers: Paper[], settings: PaperDailySettings): Paper[] {
+  // Pass capOverride to control the slice size (use Infinity to skip slicing entirely
+  // and let the caller pick the next-N-new papers against the DB).
+  filterAndRank(papers: Paper[], settings: PaperDailySettings, capOverride?: number): Paper[] {
     const keywords: InterestKeyword[] = settings.interestKeywords ?? [];
-    const maxPerConference = settings.conferenceSource?.maxPerConference ?? 20;
+    const maxPerConference = capOverride ?? (settings.conferenceSource?.maxPerConference ?? 20);
     const includeStatuses = (settings.conferenceSource?.includeStatuses ?? ["Oral", "Spotlight", "Poster"])
       .map(s => s.toLowerCase());
 
